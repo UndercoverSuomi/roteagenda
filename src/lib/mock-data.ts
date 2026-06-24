@@ -1,4 +1,5 @@
 import { addDays, fixedToday, nextWeekday, toIsoDate } from "@/lib/date";
+import { DEFAULT_AI_MODEL_ID } from "@/lib/ai-models";
 import type { AppData, Project, Task } from "@/lib/types";
 
 const seedNow = "2026-06-24T09:41:00.000Z";
@@ -151,6 +152,9 @@ export function createInitialData(): AppData {
       id: "user-1",
       name: "Mara",
       email: "mara@example.org",
+    },
+    settings: {
+      aiModel: DEFAULT_AI_MODEL_ID,
     },
     projects: initialProjects,
     tasks: initialTasks,

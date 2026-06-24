@@ -22,9 +22,15 @@ import {
   Trash2,
   X,
 } from "lucide-react";
+import { ID, type Models } from "appwrite";
 import { useEffect, useMemo, useState } from "react";
-import { client } from "@/lib/appwrite";
-import { processRawNote } from "@/lib/ai";
+import { account, client } from "@/lib/appwrite";
+import { processRawNoteWithConfiguredAi } from "@/lib/ai-client";
+import { AI_MODEL_OPTIONS, type AiModelId } from "@/lib/ai-models";
+import {
+  loadAppDataForUser,
+  saveAppData,
+} from "@/lib/appwrite-store";
 import { formatDateLabel, toIsoDate } from "@/lib/date";
 import { createInitialData } from "@/lib/mock-data";
 import type {
@@ -40,8 +46,9 @@ type Screen = "welcome" | "today" | "capture" | "inbox" | "projects" | "project"
 type TaskFilter = "all" | "today" | "planned" | "later";
 type ProjectDetailTab = "tasks" | "details" | "notes";
 type TaskDetailTab = "details" | "raw" | "ai";
-
-const STORAGE_KEY = "rote-agenda-mvp";
+type AuthMode = "login" | "register";
+type AuthStatus = "loading" | "signedOut" | "signedIn";
+type DataStatus = "idle" | "loading" | "ready" | "error";
 
 const priorityLabels: Record<TaskPriority, string> = {
   low: "Niedrig",
@@ -61,7 +68,14 @@ function cx(...classes: Array<string | false | null | undefined>) {
 
 export function RoteAgendaApp() {
   const [data, setData] = useState<AppData>(() => createInitialData());
-  const [isHydrated, setIsHydrated] = useState(false);
+  const [authUser, setAuthUser] = useState<Models.User<Models.Preferences> | null>(null);
+  const [authStatus, setAuthStatus] = useState<AuthStatus>("loading");
+  const [authMode, setAuthMode] = useState<AuthMode>("login");
+  const [isAuthSubmitting, setIsAuthSubmitting] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [dataStatus, setDataStatus] = useState<DataStatus>("idle");
+  const [dataError, setDataError] = useState<string | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
   const [screen, setScreen] = useState<Screen>("welcome");
   const [taskFilter, setTaskFilter] = useState<TaskFilter>("all");
   const [projectTab, setProjectTab] = useState<ProjectDetailTab>("tasks");
@@ -70,34 +84,68 @@ export function RoteAgendaApp() {
   const [selectedTaskId, setSelectedTaskId] = useState("task-angebot");
   const [captureText, setCaptureText] = useState("");
   const [activeSuggestions, setActiveSuggestions] = useState<AiSuggestion[]>([]);
+  const [captureError, setCaptureError] = useState<string | null>(null);
+  const [isProcessingNote, setIsProcessingNote] = useState(false);
   const [editingTask, setEditingTask] = useState<Task | null>(null);
   const [editingSuggestionId, setEditingSuggestionId] = useState<string | null>(null);
 
   useEffect(() => {
-    void client.ping().catch(() => undefined);
+    let isActive = true;
+
+    async function boot() {
+      void client.ping().catch(() => undefined);
+
+      try {
+        const user = await account.get();
+        if (!isActive) return;
+
+        setAuthUser(user);
+        setAuthStatus("signedIn");
+        setDataStatus("loading");
+        await loadRemoteData(user);
+      } catch {
+        if (!isActive) return;
+        setAuthStatus("signedOut");
+        setDataStatus("idle");
+      }
+    }
+
+    void boot();
+
+    return () => {
+      isActive = false;
+    };
   }, []);
 
   useEffect(() => {
+    if (authStatus !== "signedIn" || dataStatus !== "ready") {
+      return;
+    }
+
     const timer = window.setTimeout(() => {
-      const saved = window.localStorage.getItem(STORAGE_KEY);
-      if (saved) {
-        try {
-          setData(JSON.parse(saved) as AppData);
-        } catch {
-          window.localStorage.removeItem(STORAGE_KEY);
-        }
-      }
-      setIsHydrated(true);
-    }, 0);
+      setIsSaving(true);
+      void saveAppData(data)
+        .then(() => setDataError(null))
+        .catch((error) => {
+          setDataError(readErrorMessage(error));
+        })
+        .finally(() => setIsSaving(false));
+    }, 500);
 
     return () => window.clearTimeout(timer);
-  }, []);
+  }, [authStatus, data, dataStatus]);
 
-  useEffect(() => {
-    if (isHydrated) {
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+  async function loadRemoteData(user: Models.User<Models.Preferences>) {
+    try {
+      const remoteData = await loadAppDataForUser(user);
+      setData(remoteData);
+      setDataError(null);
+      setDataStatus("ready");
+    } catch (error) {
+      setDataError(readErrorMessage(error));
+      setDataStatus("error");
     }
-  }, [data, isHydrated]);
+  }
 
   const selectedProject =
     data.projects.find((project) => project.id === selectedProjectId) ??
@@ -149,18 +197,31 @@ export function RoteAgendaApp() {
     }
   }
 
-  function handleProcessNote() {
+  async function handleProcessNote() {
     const trimmed = captureText.trim();
     if (!trimmed) return;
 
-    const result = processRawNote(trimmed, data.projects);
-    setData((current) => ({
-      ...current,
-      rawNotes: [result.rawNote, ...current.rawNotes],
-      suggestions: [...result.suggestions, ...current.suggestions],
-    }));
-    setActiveSuggestions(result.suggestions);
-    setCaptureText("");
+    setCaptureError(null);
+    setIsProcessingNote(true);
+
+    try {
+      const result = await processRawNoteWithConfiguredAi({
+        note: trimmed,
+        modelId: data.settings.aiModel,
+        projects: data.projects,
+      });
+      setData((current) => ({
+        ...current,
+        rawNotes: [result.rawNote, ...current.rawNotes],
+        suggestions: [...result.suggestions, ...current.suggestions],
+      }));
+      setActiveSuggestions(result.suggestions);
+      setCaptureText("");
+    } catch (error) {
+      setCaptureError(readErrorMessage(error));
+    } finally {
+      setIsProcessingNote(false);
+    }
   }
 
   function updateSuggestion(updated: AiSuggestion) {
@@ -319,6 +380,108 @@ export function RoteAgendaApp() {
     });
   }
 
+  async function handleAuthSubmit({
+    email,
+    password,
+    name,
+  }: {
+    email: string;
+    password: string;
+    name: string;
+  }) {
+    setAuthError(null);
+    setIsAuthSubmitting(true);
+
+    try {
+      if (authMode === "register") {
+        await account.create({
+          userId: ID.unique(),
+          email,
+          password,
+          name: name.trim() || email,
+        });
+      }
+
+      await account.createEmailPasswordSession({ email, password });
+      const user = await account.get();
+      setAuthUser(user);
+      setAuthStatus("signedIn");
+      setDataStatus("loading");
+      await loadRemoteData(user);
+    } catch (error) {
+      setAuthError(readErrorMessage(error));
+      setAuthStatus("signedOut");
+    } finally {
+      setIsAuthSubmitting(false);
+    }
+  }
+
+  async function handleLogout() {
+    try {
+      await account.deleteSession("current");
+    } catch {
+      // The local UI should still leave the authenticated area if the session is already gone.
+    }
+
+    setAuthUser(null);
+    setAuthStatus("signedOut");
+    setDataStatus("idle");
+    setData(createInitialData());
+    setActiveSuggestions([]);
+    setScreen("welcome");
+  }
+
+  function handleResetData() {
+    setData((current) => ({
+      ...createInitialData(),
+      user: current.user,
+      settings: current.settings,
+    }));
+    setActiveSuggestions([]);
+    setScreen("today");
+  }
+
+  function handleAiModelChange(aiModel: AiModelId) {
+    setData((current) => ({
+      ...current,
+      settings: {
+        ...current.settings,
+        aiModel,
+      },
+    }));
+  }
+
+  if (authStatus === "loading") {
+    return <AppShellMessage title="Rote Agenda" text="Appwrite-Sitzung wird geprüft." />;
+  }
+
+  if (authStatus === "signedOut") {
+    return (
+      <AuthScreen
+        mode={authMode}
+        error={authError}
+        isSubmitting={isAuthSubmitting}
+        onModeChange={setAuthMode}
+        onSubmit={handleAuthSubmit}
+      />
+    );
+  }
+
+  if (dataStatus === "loading") {
+    return <AppShellMessage title="Rote Agenda" text="Daten werden aus Appwrite geladen." />;
+  }
+
+  if (dataStatus === "error") {
+    return (
+      <AppShellMessage
+        title="Appwrite Setup"
+        text={dataError ?? "Die Appwrite-Daten konnten nicht geladen werden."}
+        actionLabel="Abmelden"
+        onAction={handleLogout}
+      />
+    );
+  }
+
   const screenContent = (() => {
     if (screen === "welcome") {
       return <WelcomeScreen onStart={() => navigate("today")} />;
@@ -331,6 +494,9 @@ export function RoteAgendaApp() {
           suggestions={activeSuggestions}
           projects={data.projects}
           editingSuggestionId={editingSuggestionId}
+          modelLabel={aiModelLabel(data.settings.aiModel)}
+          error={captureError}
+          isProcessing={isProcessingNote}
           onBack={() => navigate("today")}
           onChangeText={setCaptureText}
           onProcess={handleProcessNote}
@@ -405,7 +571,18 @@ export function RoteAgendaApp() {
     }
 
     if (screen === "more") {
-      return <MoreScreen onReset={() => setData(createInitialData())} />;
+      return (
+        <MoreScreen
+          userName={authUser?.name || data.user.name}
+          userEmail={authUser?.email || data.user.email}
+          aiModel={data.settings.aiModel}
+          isSaving={isSaving}
+          dataError={dataError}
+          onAiModelChange={handleAiModelChange}
+          onReset={handleResetData}
+          onLogout={handleLogout}
+        />
+      );
     }
 
     return (
@@ -494,6 +671,126 @@ function WorkSurface({
         {children}
       </div>
     </section>
+  );
+}
+
+function AppShellMessage({
+  title,
+  text,
+  actionLabel,
+  onAction,
+}: {
+  title: string;
+  text: string;
+  actionLabel?: string;
+  onAction?: () => void;
+}) {
+  return (
+    <main className="grid min-h-screen place-items-center bg-[var(--paper)] px-6 text-[var(--ink)]">
+      <section className="w-full max-w-[430px] rounded-[8px] border border-[var(--line)] bg-[var(--paper-soft)] p-7 shadow-sm">
+        <p className="text-[11px] font-extrabold uppercase tracking-[0.05em] text-[var(--red)]">
+          Rote Agenda
+        </p>
+        <h1 className="mt-3 font-display text-[30px] font-bold">{title}</h1>
+        <p className="mt-4 text-[14px] leading-7 text-[var(--muted)]">{text}</p>
+        {actionLabel && onAction ? (
+          <button
+            type="button"
+            onClick={onAction}
+            className="mt-6 w-full rounded-[5px] bg-[var(--green)] px-4 py-3 text-[13px] font-bold text-white"
+          >
+            {actionLabel}
+          </button>
+        ) : null}
+      </section>
+    </main>
+  );
+}
+
+function AuthScreen({
+  mode,
+  error,
+  isSubmitting,
+  onModeChange,
+  onSubmit,
+}: {
+  mode: AuthMode;
+  error: string | null;
+  isSubmitting: boolean;
+  onModeChange: (mode: AuthMode) => void;
+  onSubmit: (credentials: { email: string; password: string; name: string }) => void;
+}) {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [name, setName] = useState("");
+  const isRegister = mode === "register";
+
+  return (
+    <main className="grid min-h-screen place-items-center bg-[var(--paper)] px-6 text-[var(--ink)]">
+      <section className="w-full max-w-[430px] rounded-[8px] border border-[var(--line)] bg-[var(--paper-soft)] p-7 shadow-sm">
+        <p className="text-[11px] font-extrabold uppercase tracking-[0.05em] text-[var(--red)]">
+          Rote Agenda
+        </p>
+        <h1 className="mt-3 font-display text-[34px] font-bold">
+          {isRegister ? "Account erstellen" : "Anmelden"}
+        </h1>
+        <form
+          className="mt-7 space-y-4"
+          onSubmit={(event) => {
+            event.preventDefault();
+            onSubmit({ email: email.trim(), password, name: name.trim() });
+          }}
+        >
+          {isRegister ? (
+            <Field label="Name">
+              <input
+                value={name}
+                onChange={(event) => setName(event.target.value)}
+                className="h-11 w-full rounded-[5px] border border-[var(--line)] bg-white px-3 text-[13px] outline-none"
+              />
+            </Field>
+          ) : null}
+          <Field label="E-Mail">
+            <input
+              type="email"
+              value={email}
+              onChange={(event) => setEmail(event.target.value)}
+              className="h-11 w-full rounded-[5px] border border-[var(--line)] bg-white px-3 text-[13px] outline-none"
+              required
+            />
+          </Field>
+          <Field label="Passwort">
+            <input
+              type="password"
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              className="h-11 w-full rounded-[5px] border border-[var(--line)] bg-white px-3 text-[13px] outline-none"
+              minLength={8}
+              required
+            />
+          </Field>
+          {error ? (
+            <p className="rounded-[5px] border border-[var(--red)] bg-white/70 p-3 text-[12px] leading-5 text-[var(--red)]">
+              {error}
+            </p>
+          ) : null}
+          <button
+            type="submit"
+            disabled={isSubmitting}
+            className="flex h-12 w-full items-center justify-center rounded-[5px] bg-[var(--red)] px-4 text-[13px] font-bold text-white disabled:opacity-50"
+          >
+            {isSubmitting ? "Bitte warten..." : isRegister ? "Registrieren" : "Anmelden"}
+          </button>
+        </form>
+        <button
+          type="button"
+          onClick={() => onModeChange(isRegister ? "login" : "register")}
+          className="mt-5 text-[12px] font-bold underline underline-offset-2"
+        >
+          {isRegister ? "Schon registriert? Anmelden" : "Noch kein Account? Registrieren"}
+        </button>
+      </section>
+    </main>
   );
 }
 
@@ -658,6 +955,9 @@ function CaptureScreen({
   suggestions,
   projects,
   editingSuggestionId,
+  modelLabel,
+  error,
+  isProcessing,
   onBack,
   onChangeText,
   onProcess,
@@ -670,6 +970,9 @@ function CaptureScreen({
   suggestions: AiSuggestion[];
   projects: Project[];
   editingSuggestionId: string | null;
+  modelLabel: string;
+  error: string | null;
+  isProcessing: boolean;
   onBack: () => void;
   onChangeText: (value: string) => void;
   onProcess: () => void;
@@ -698,12 +1001,17 @@ function CaptureScreen({
         <button
           type="button"
           onClick={onProcess}
-          disabled={!captureText.trim()}
+          disabled={!captureText.trim() || isProcessing}
           className="mt-4 flex h-13 w-full items-center justify-center gap-2 rounded-[5px] bg-[var(--red)] px-5 text-[14px] font-bold text-white shadow-sm transition hover:bg-[var(--red-dark)] disabled:opacity-50"
         >
           <Sparkles className="h-4 w-4" />
-          Mit KI verarbeiten
+          {isProcessing ? "KI verarbeitet..." : `Mit ${modelLabel} verarbeiten`}
         </button>
+        {error ? (
+          <p className="mt-3 rounded-[5px] border border-[var(--red)] bg-white/70 p-3 text-[12px] leading-5 text-[var(--red)]">
+            {error}
+          </p>
+        ) : null}
       </div>
 
       <div className="mt-6 space-y-4">
@@ -1106,13 +1414,55 @@ function TaskDetailScreen({
   );
 }
 
-function MoreScreen({ onReset }: { onReset: () => void }) {
+function MoreScreen({
+  userName,
+  userEmail,
+  aiModel,
+  isSaving,
+  dataError,
+  onAiModelChange,
+  onReset,
+  onLogout,
+}: {
+  userName: string;
+  userEmail: string;
+  aiModel: AiModelId;
+  isSaving: boolean;
+  dataError: string | null;
+  onAiModelChange: (model: AiModelId) => void;
+  onReset: () => void;
+  onLogout: () => void;
+}) {
   return (
     <div className="flex flex-1 flex-col px-6 pt-3 md:px-8 md:pt-8 lg:px-10">
       <ScreenHeader title="Mehr" leftIcon={<MoreHorizontal className="h-5 w-5" />} />
       <div className="mt-8 space-y-3">
         <InfoTile label="Produkt" value="Rote Agenda Webtool" />
-        <InfoTile label="Speicherung" value="Lokal im Browser" />
+        <InfoTile label="Account" value={userName || userEmail} />
+        <InfoTile label="Speicherung" value={isSaving ? "Appwrite speichert..." : "Appwrite Cloud"} />
+        <section className="rounded-[6px] border border-[var(--line)] bg-white/45 p-4">
+          <label className="block">
+            <span className="mb-2 block text-[11px] font-bold uppercase tracking-[0.04em] text-[var(--muted)]">
+              KI-Modell
+            </span>
+            <select
+              value={aiModel}
+              onChange={(event) => onAiModelChange(event.target.value as AiModelId)}
+              className="h-11 w-full rounded-[5px] border border-[var(--line)] bg-white px-3 text-[13px] font-bold outline-none"
+            >
+              {AI_MODEL_OPTIONS.map((option) => (
+                <option key={option.id} value={option.id}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        </section>
+        {dataError ? (
+          <p className="rounded-[5px] border border-[var(--red)] bg-white/70 p-3 text-[12px] leading-5 text-[var(--red)]">
+            {dataError}
+          </p>
+        ) : null}
         <button
           type="button"
           onClick={onReset}
@@ -1120,6 +1470,14 @@ function MoreScreen({ onReset }: { onReset: () => void }) {
         >
           Demo-Daten zurücksetzen
           <Trash2 className="h-4 w-4" />
+        </button>
+        <button
+          type="button"
+          onClick={onLogout}
+          className="flex w-full items-center justify-between rounded-[6px] border border-[var(--line)] bg-white/45 p-4 text-[13px] font-bold"
+        >
+          Abmelden
+          <X className="h-4 w-4" />
         </button>
       </div>
     </div>
@@ -1928,4 +2286,13 @@ function projectProgress(project: Project, tasks: Task[]) {
   if (!tasks.length) return project.progress;
   const done = tasks.filter((task) => task.status === "done").length;
   return Math.round((done / tasks.length) * 100);
+}
+
+function readErrorMessage(error: unknown) {
+  if (error instanceof Error && error.message) return error.message;
+  return "Unerwarteter Fehler. Bitte versuche es erneut.";
+}
+
+function aiModelLabel(model: AiModelId) {
+  return AI_MODEL_OPTIONS.find((option) => option.id === model)?.label ?? model;
 }

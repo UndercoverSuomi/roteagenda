@@ -1,55 +1,143 @@
 # Appwrite Hosting
 
-Diese Anleitung bereitet Rote Agenda für Appwrite Sites vor. Die App ist aktuell ein Next.js Webtool ohne Backend-Abhängigkeiten; es werden keine Environment-Variablen benötigt.
+Diese Anleitung bereitet Rote Agenda fuer Appwrite Sites mit Appwrite Auth, Appwrite Databases und serverseitiger KI-Verarbeitung vor.
 
-## Empfohlener Weg: GitHub Deployment
+## Appwrite Projekt
 
-1. Appwrite Console öffnen und ein neues Projekt für `Rote Agenda` erstellen oder ein bestehendes Projekt auswählen.
-2. In der linken Seitenleiste `Sites` öffnen.
-3. `Create site` wählen.
-4. GitHub verbinden und das Repository `UndercoverSuomi/roteagenda` auswählen.
-5. Als Produktions-Branch `main` setzen.
-6. Als Root Directory `.` setzen.
-7. Als Framework `Next.js` auswählen.
-8. Build Settings prüfen:
+1. Appwrite Console oeffnen und das Projekt `Rote Agenda` auswaehlen.
+2. Unter `Auth` E-Mail/Passwort-Login aktivieren.
+3. Unter `Platforms` die Web-Hosts eintragen:
+   - `localhost` fuer lokale Entwicklung
+   - `roteagenda.appwrite.network` fuer Produktion
+4. Unter `Databases` eine Datenbank fuer Rote Agenda anlegen.
+5. Fuenf Collections anlegen und die Collection IDs als Environment Variables hinterlegen.
+
+## Collections
+
+Alle Collections sollten Document Security nutzen. Erlaube authentifizierten Nutzern das Erstellen von Dokumenten; die App setzt beim Speichern pro Dokument `read`, `update` und `delete` fuer den jeweiligen Nutzer.
+
+### projects
+
+- `id` string, required
+- `title` string, required
+- `description` string, required
+- `keywords` string array, required
+- `progress` integer, required
+- `aiEnabled` boolean, required
+- `createdAt` string, required
+- `updatedAt` string, required
+
+### tasks
+
+- `id` string, required
+- `title` string, required
+- `description` string, required
+- `projectId` string, required
+- `status` string, required
+- `priority` string, required
+- `dueDate` string, optional
+- `sourceNoteId` string, optional
+- `createdBy` string, required
+- `createdAt` string, required
+- `updatedAt` string, required
+
+### rawNotes
+
+- `id` string, required
+- `content` string, required
+- `processed` boolean, required
+- `createdAt` string, required
+
+### suggestions
+
+- `id` string, required
+- `rawNoteId` string, required
+- `suggestedTitle` string, required
+- `suggestedDescription` string, required
+- `suggestedProjectId` string, optional
+- `suggestedNewProjectTitle` string, optional
+- `confidence` float, required
+- `priority` string, required
+- `dueDate` string, optional
+- `reasoning` string, required
+- `needsReview` boolean, required
+- `state` string, required
+- `createdAt` string, required
+
+### tags
+
+- `id` string, required
+- `label` string, required
+- `color` string, required
+
+## Environment Variables
+
+Public Appwrite-Werte:
+
+```bash
+NEXT_PUBLIC_APPWRITE_ENDPOINT=https://fra.cloud.appwrite.io/v1
+NEXT_PUBLIC_APPWRITE_PROJECT_ID=6a3bbc6600236e6bf22a
+NEXT_PUBLIC_APPWRITE_DATABASE_ID=...
+NEXT_PUBLIC_APPWRITE_PROJECTS_COLLECTION_ID=...
+NEXT_PUBLIC_APPWRITE_TASKS_COLLECTION_ID=...
+NEXT_PUBLIC_APPWRITE_RAW_NOTES_COLLECTION_ID=...
+NEXT_PUBLIC_APPWRITE_SUGGESTIONS_COLLECTION_ID=...
+NEXT_PUBLIC_APPWRITE_TAGS_COLLECTION_ID=...
+```
+
+Serverseitige KI-Keys:
+
+```bash
+OPENAI_API_KEY=...
+ZAI_API_KEY=...
+MOONSHOT_API_KEY=...
+DASHSCOPE_API_KEY=...
+MINIMAX_API_KEY=...
+DEEPSEEK_API_KEY=...
+```
+
+Optionale Provider-Overrides:
+
+```bash
+OPENAI_GPT_5_5_MODEL=gpt-5.5
+ZAI_BASE_URL=https://api.z.ai/api/paas/v4
+ZAI_GLM_5_2_MODEL=glm-5.2
+MOONSHOT_BASE_URL=https://api.moonshot.ai/v1
+MOONSHOT_KIMI_K2_7_MODEL=kimi-k2.7
+DASHSCOPE_BASE_URL=https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+DASHSCOPE_QWEN_3_7_PLUS_MODEL=qwen3.7-plus
+DASHSCOPE_QWEN_3_7_MAX_MODEL=qwen3.7-max
+MINIMAX_BASE_URL=https://api.minimax.io/v1
+MINIMAX_M3_MODEL=MiniMax-M3
+DEEPSEEK_BASE_URL=https://api.deepseek.com
+DEEPSEEK_V4_PRO_MODEL=deepseek-v4-pro
+DEEPSEEK_V4_FLASH_MODEL=deepseek-v4-flash
+```
+
+Fehlt ein Key fuer das vom Nutzer gewaehlte Modell, gibt `/api/ai/process-note` eine klare Fehlermeldung zurueck. Es gibt keinen Mock-KI-Fallback.
+
+## GitHub Deployment
+
+1. In Appwrite `Sites` oeffnen.
+2. `Create site` waehlen.
+3. GitHub verbinden und das Repository `UndercoverSuomi/roteagenda` auswaehlen.
+4. Als Produktions-Branch `main` setzen.
+5. Als Root Directory `.` setzen.
+6. Als Framework `Next.js` auswaehlen.
+7. Build Settings:
    - Install command: `npm install`
    - Build command: `npm run build`
    - Output directory: `./.next`
    - Rendering: `SSR`
-   - Runtime: `Node.js 22` oder `node-22`, falls Appwrite danach fragt
-9. Environment Variables leer lassen. Für den aktuellen MVP sind keine Werte erforderlich.
-10. Deploy starten.
-11. Nach erfolgreichem Build über `Visit site` die Appwrite-URL öffnen.
+   - Runtime: `Node.js 22` oder neuer
+8. Environment Variables setzen.
+9. Deploy starten.
+10. Nach erfolgreichem Build ueber `Visit site` die Appwrite-URL oeffnen.
 
-## CLI-Alternative
-
-Appwrite empfiehlt Git-basierte Deployments für Sites. Falls du trotzdem lokal per CLI deployen willst:
+## Lokale Vorabpruefung
 
 ```bash
-npm install -g appwrite-cli
-appwrite login
-appwrite init project
-appwrite init sites
-appwrite push sites
-```
-
-Bei `appwrite init sites` dieselben Werte verwenden:
-
-- Name: `Rote Agenda`
-- Site ID: frei wählbar, zum Beispiel `rote-agenda`
-- Framework: `Next.js`
-- Root directory: `.`
-- Install command: `npm install`
-- Build command: `npm run build`
-- Output directory: `./.next`
-- Runtime: `node-22`
-- Adapter/Rendering: `ssr`
-
-## Lokale Vorabprüfung
-
-Vor jedem Deployment lokal ausführen:
-
-```bash
+npm test
 npm run lint
 npm run build
 ```
@@ -60,19 +148,9 @@ Optional danach lokal wie Appwrite im Production-Modus starten:
 npm run start
 ```
 
-## Appwrite SDK
-
-Der Web SDK Client ist in `src/lib/appwrite.ts` konfiguriert:
-
-- Project ID: `6a3bbc6600236e6bf22a`
-- Endpoint: `https://fra.cloud.appwrite.io/v1`
-- Exports: `client`, `account`, `databases`
-
-Beim Öffnen der App wird automatisch `client.ping()` ausgeführt. Lokal funktioniert der Ping mit `http://localhost:3000`. Falls du über `http://127.0.0.1:3000` testest und CORS-Fehler siehst, füge in Appwrite Console unter deinem Projekt zusätzlich eine Web Platform für `127.0.0.1` hinzu oder nutze `localhost`.
-
 ## Referenzen
 
 - Appwrite Next.js Quickstart: https://appwrite.io/docs/products/sites/quick-start/nextjs
 - Appwrite Sites Quickstart: https://appwrite.io/docs/products/sites/quick-start
 - Appwrite Sites Build Settings: https://appwrite.io/docs/products/sites/develop
-- Appwrite CLI Sites Deployment: https://appwrite.io/docs/products/sites/deploy-from-cli
+- Appwrite Web SDK: https://appwrite.io/docs/getting-started-for-web

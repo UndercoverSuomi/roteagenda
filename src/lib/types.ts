@@ -1,3 +1,5 @@
+import type { AiModelId } from "@/lib/ai-models";
+
 export type TaskStatus = "open" | "in_progress" | "done";
 export type TaskPriority = "low" | "medium" | "high";
 export type SuggestionState = "pending" | "accepted" | "rejected";
@@ -62,8 +64,13 @@ export interface Tag {
   color: string;
 }
 
+export interface UserSettings {
+  aiModel: AiModelId;
+}
+
 export interface AppData {
   user: User;
+  settings: UserSettings;
   projects: Project[];
   tasks: Task[];
   rawNotes: RawNote[];
