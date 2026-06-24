@@ -29,6 +29,10 @@ npm run dev
 
 Danach http://localhost:3000 öffnen.
 
+## Hosting
+
+Die App ist für Appwrite Sites vorbereitet. Die exakten Schritte stehen in [docs/appwrite-hosting.md](docs/appwrite-hosting.md).
+
 ## Checks
 
 ```bash

@@ -38,6 +38,7 @@ import type {
 type Screen = "welcome" | "today" | "capture" | "inbox" | "projects" | "project" | "task" | "more";
 type TaskFilter = "all" | "today" | "planned" | "later";
 type ProjectDetailTab = "tasks" | "details" | "notes";
+type TaskDetailTab = "details" | "raw" | "ai";
 
 const STORAGE_KEY = "rote-agenda-mvp";
 
@@ -63,6 +64,7 @@ export function RoteAgendaApp() {
   const [screen, setScreen] = useState<Screen>("welcome");
   const [taskFilter, setTaskFilter] = useState<TaskFilter>("all");
   const [projectTab, setProjectTab] = useState<ProjectDetailTab>("tasks");
+  const [taskDetailTab, setTaskDetailTab] = useState<TaskDetailTab>("details");
   const [selectedProjectId, setSelectedProjectId] = useState("project-marketing");
   const [selectedTaskId, setSelectedTaskId] = useState("task-angebot");
   const [captureText, setCaptureText] = useState("");
@@ -137,6 +139,7 @@ export function RoteAgendaApp() {
     if (task) {
       setSelectedTaskId(taskId);
       setSelectedProjectId(task.projectId);
+      setTaskDetailTab("details");
       setScreen("task");
     }
   }
@@ -344,6 +347,7 @@ export function RoteAgendaApp() {
           onUpdateSuggestion={updateSuggestion}
           onAccept={acceptSuggestion}
           onReject={rejectSuggestion}
+          onOpenMore={() => navigate("more")}
         />
       );
     }
@@ -354,6 +358,7 @@ export function RoteAgendaApp() {
           projects={data.projects}
           tasks={data.tasks}
           onOpenProject={openProject}
+          onOpenMore={() => navigate("more")}
         />
       );
     }
@@ -370,6 +375,7 @@ export function RoteAgendaApp() {
           onToggleTask={toggleTask}
           onAddTask={() => createBlankTask(selectedProject.id)}
           onToggleAi={() => toggleProjectAi(selectedProject.id)}
+          onOpenMore={() => navigate("more")}
         />
       );
     }
@@ -383,7 +389,9 @@ export function RoteAgendaApp() {
           suggestion={data.suggestions.find(
             (suggestion) => suggestion.rawNoteId === selectedTask.sourceNoteId,
           )}
+          tab={taskDetailTab}
           onBack={() => navigate("today")}
+          onTabChange={setTaskDetailTab}
           onEdit={() => setEditingTask(selectedTask)}
           onToggleDone={() => toggleTask(selectedTask.id)}
           onOpenProject={() => openProject(selectedTask.projectId)}
@@ -405,6 +413,8 @@ export function RoteAgendaApp() {
         onOpenTask={openTask}
         onToggleTask={toggleTask}
         onCapture={() => navigate("capture")}
+        onOpenInbox={() => navigate("inbox")}
+        onOpenMore={() => navigate("more")}
       />
     );
   })();
@@ -527,7 +537,7 @@ function WelcomeScreen({ onStart }: { onStart: () => void }) {
           <button
             type="button"
             onClick={onStart}
-            className="mx-auto block text-[13px] font-bold underline underline-offset-2"
+            className="mx-auto block text-[13px] font-bold text-[var(--cream)] underline underline-offset-2 md:text-[var(--ink)]"
           >
             Anmelden
           </button>
@@ -546,6 +556,8 @@ function TodayScreen({
   onOpenTask,
   onToggleTask,
   onCapture,
+  onOpenInbox,
+  onOpenMore,
 }: {
   tasks: Task[];
   projects: Map<string, Project>;
@@ -555,10 +567,20 @@ function TodayScreen({
   onOpenTask: (taskId: string) => void;
   onToggleTask: (taskId: string) => void;
   onCapture: () => void;
+  onOpenInbox: () => void;
+  onOpenMore: () => void;
 }) {
   return (
     <div className="flex flex-1 flex-col px-6 pt-3 md:px-8 md:pt-8 lg:px-10">
-      <ScreenHeader title="Heute" leftIcon={<Menu className="h-6 w-6" />} rightIcon={<Bell className="h-5 w-5" />} />
+      <ScreenHeader
+        title="Heute"
+        leftIcon={<Menu className="h-6 w-6" />}
+        rightIcon={<Bell className="h-5 w-5" />}
+        leftLabel="Mehr öffnen"
+        rightLabel="Inbox öffnen"
+        onLeft={onOpenMore}
+        onRight={onOpenInbox}
+      />
 
       <button
         type="button"
@@ -571,7 +593,11 @@ function TodayScreen({
         </span>
       </button>
 
-      <section className="mt-5 rounded-[5px] border border-[var(--line)] bg-white/50 p-4 shadow-sm">
+      <button
+        type="button"
+        onClick={onOpenInbox}
+        className="mt-5 w-full rounded-[5px] border border-[var(--line)] bg-white/50 p-4 text-left shadow-sm transition hover:bg-white/70"
+      >
         <div className="flex items-center justify-between gap-4">
           <div className="flex items-center gap-2 text-[11px] font-extrabold uppercase tracking-[0.03em]">
             <Sparkles className="h-4 w-4 text-[var(--green)]" />
@@ -585,11 +611,15 @@ function TodayScreen({
           <span>1 erstellt</span>
           <span>{pendingCount || 1} benötigt Hilfe</span>
         </div>
-      </section>
+      </button>
 
       <div className="mt-9 flex items-end justify-between">
         <h2 className="font-display text-[20px] font-bold">Meine Aufgaben</h2>
-        <button type="button" className="text-[12px] font-semibold underline underline-offset-2">
+        <button
+          type="button"
+          onClick={() => onFilterChange("all")}
+          className="text-[12px] font-semibold underline underline-offset-2"
+        >
           Alle anzeigen
         </button>
       </div>
@@ -648,6 +678,7 @@ function CaptureScreen({
       <ScreenHeader
         title="Schnellnotiz"
         leftIcon={<ArrowLeft className="h-5 w-5" />}
+        leftLabel="Zurück"
         onLeft={onBack}
         rightIcon={<Sparkles className="h-5 w-5" />}
       />
@@ -708,6 +739,7 @@ function InboxScreen({
   onUpdateSuggestion,
   onAccept,
   onReject,
+  onOpenMore,
 }: {
   suggestions: AiSuggestion[];
   projects: Project[];
@@ -716,10 +748,17 @@ function InboxScreen({
   onUpdateSuggestion: (suggestion: AiSuggestion) => void;
   onAccept: (suggestion: AiSuggestion, createdBy?: "ai" | "user") => void;
   onReject: (suggestionId: string) => void;
+  onOpenMore: () => void;
 }) {
   return (
     <div className="flex flex-1 flex-col px-6 pt-3 md:px-8 md:pt-8 lg:px-10">
-      <ScreenHeader title="Inbox" leftIcon={<Inbox className="h-5 w-5" />} rightIcon={<MoreHorizontal className="h-5 w-5" />} />
+      <ScreenHeader
+        title="Inbox"
+        leftIcon={<Inbox className="h-5 w-5" />}
+        rightIcon={<MoreHorizontal className="h-5 w-5" />}
+        rightLabel="Mehr öffnen"
+        onRight={onOpenMore}
+      />
       <p className="mt-5 text-[13px] leading-6 text-[var(--muted)]">
         Ungeprüfte KI-Vorschläge bleiben hier, bis du sie annimmst, änderst oder ablehnst.
       </p>
@@ -756,14 +795,22 @@ function ProjectsScreen({
   projects,
   tasks,
   onOpenProject,
+  onOpenMore,
 }: {
   projects: Project[];
   tasks: Task[];
   onOpenProject: (projectId: string) => void;
+  onOpenMore: () => void;
 }) {
   return (
     <div className="flex flex-1 flex-col px-6 pt-3 md:px-8 md:pt-8 lg:px-10">
-      <ScreenHeader title="Projekte" leftIcon={<FolderKanban className="h-5 w-5" />} rightIcon={<MoreHorizontal className="h-5 w-5" />} />
+      <ScreenHeader
+        title="Projekte"
+        leftIcon={<FolderKanban className="h-5 w-5" />}
+        rightIcon={<MoreHorizontal className="h-5 w-5" />}
+        rightLabel="Mehr öffnen"
+        onRight={onOpenMore}
+      />
       <div className="mt-6 grid gap-4 lg:grid-cols-2">
         {projects.map((project) => {
           const projectTasks = tasks.filter((task) => task.projectId === project.id);
@@ -815,6 +862,7 @@ function ProjectDetailScreen({
   onToggleTask,
   onAddTask,
   onToggleAi,
+  onOpenMore,
 }: {
   project: Project;
   tasks: Task[];
@@ -825,6 +873,7 @@ function ProjectDetailScreen({
   onToggleTask: (taskId: string) => void;
   onAddTask: () => void;
   onToggleAi: () => void;
+  onOpenMore: () => void;
 }) {
   const progress = projectProgress(project, tasks);
 
@@ -835,7 +884,10 @@ function ProjectDetailScreen({
           title=""
           leftIcon={<ArrowLeft className="h-5 w-5" />}
           rightIcon={<MoreHorizontal className="h-5 w-5" />}
+          leftLabel="Zurück"
+          rightLabel="Mehr öffnen"
           onLeft={onBack}
+          onRight={onOpenMore}
         />
         <p className="mt-8 text-[11px] font-extrabold uppercase tracking-[0.05em] text-[var(--red)]">
           Projekt
@@ -943,7 +995,9 @@ function TaskDetailScreen({
   project,
   rawNote,
   suggestion,
+  tab,
   onBack,
+  onTabChange,
   onEdit,
   onToggleDone,
   onOpenProject,
@@ -952,7 +1006,9 @@ function TaskDetailScreen({
   project?: Project;
   rawNote?: { content: string } | undefined;
   suggestion?: AiSuggestion | undefined;
+  tab: TaskDetailTab;
   onBack: () => void;
+  onTabChange: (tab: TaskDetailTab) => void;
   onEdit: () => void;
   onToggleDone: () => void;
   onOpenProject: () => void;
@@ -964,6 +1020,8 @@ function TaskDetailScreen({
           title=""
           leftIcon={<ArrowLeft className="h-5 w-5" />}
           rightIcon={<Edit3 className="h-5 w-5" />}
+          leftLabel="Zurück"
+          rightLabel="Aufgabe bearbeiten"
           onLeft={onBack}
           onRight={onEdit}
         />
@@ -988,17 +1046,7 @@ function TaskDetailScreen({
             <span className="mt-1 block font-bold">{project?.title ?? "Ohne Projekt"}</span>
           </button>
         </div>
-      </div>
-
-      <DetailTabs
-        value="details"
-        onChange={() => undefined}
-        tabs={["details", "notes", "tasks"]}
-        labels={{ details: "Details", notes: "Rohnotiz", tasks: "KI" }}
-      />
-
-      <div className="space-y-5 px-6 md:px-8 lg:px-10">
-        <label className="flex items-center gap-3 rounded-[6px] border border-[var(--line)] bg-white/45 p-4 text-[14px] font-bold">
+        <label className="mt-5 flex items-center gap-3 rounded-[6px] border border-[var(--line)] bg-white/45 p-4 text-[14px] font-bold">
           <button
             type="button"
             onClick={onToggleDone}
@@ -1008,6 +1056,17 @@ function TaskDetailScreen({
           </button>
           Erledigt
         </label>
+      </div>
+
+      <DetailTabs
+        value={tab}
+        onChange={(value) => onTabChange(value as TaskDetailTab)}
+        tabs={["details", "raw", "ai"]}
+        labels={{ details: "Details", raw: "Rohnotiz", ai: "KI" }}
+      />
+
+      <div className="space-y-5 px-6 md:px-8 lg:px-10">
+        {tab === "details" ? (
         <section>
           <h2 className="text-[12px] font-bold uppercase tracking-[0.04em] text-[var(--muted)]">
             Beschreibung
@@ -1016,6 +1075,8 @@ function TaskDetailScreen({
             {task.description || "Keine Beschreibung hinterlegt."}
           </p>
         </section>
+        ) : null}
+        {tab === "raw" ? (
         <section>
           <h2 className="text-[12px] font-bold uppercase tracking-[0.04em] text-[var(--muted)]">
             Ursprüngliche Rohnotiz
@@ -1024,6 +1085,8 @@ function TaskDetailScreen({
             {rawNote?.content ?? "Diese Aufgabe wurde manuell erstellt."}
           </p>
         </section>
+        ) : null}
+        {tab === "ai" ? (
         <section>
           <h2 className="text-[12px] font-bold uppercase tracking-[0.04em] text-[var(--muted)]">
             KI-Zusammenfassung
@@ -1032,6 +1095,7 @@ function TaskDetailScreen({
             {suggestion?.reasoning ?? "Keine KI-Zusammenfassung vorhanden."}
           </p>
         </section>
+        ) : null}
       </div>
     </div>
   );
@@ -1061,32 +1125,52 @@ function ScreenHeader({
   title,
   leftIcon,
   rightIcon,
+  leftLabel,
+  rightLabel,
   onLeft,
   onRight,
 }: {
   title: string;
   leftIcon?: React.ReactNode;
   rightIcon?: React.ReactNode;
+  leftLabel?: string;
+  rightLabel?: string;
   onLeft?: () => void;
   onRight?: () => void;
 }) {
+  const leftSlotClass = "grid h-10 w-10 place-items-center text-[var(--ink)]";
+  const rightSlotClass = `${leftSlotClass} justify-self-end`;
+
+  function renderSlot(
+    icon: React.ReactNode,
+    onClick: (() => void) | undefined,
+    className: string,
+    label?: string,
+  ) {
+    if (!icon) {
+      return <span className={className} aria-hidden="true" />;
+    }
+
+    if (!onClick) {
+      return (
+        <span className={className} aria-hidden="true">
+          {icon}
+        </span>
+      );
+    }
+
+    return (
+      <button type="button" onClick={onClick} className={className} aria-label={label}>
+        {icon}
+      </button>
+    );
+  }
+
   return (
     <header className="grid h-10 grid-cols-[44px_1fr_44px] items-center">
-      <button
-        type="button"
-        onClick={onLeft}
-        className="grid h-10 w-10 place-items-center text-[var(--ink)]"
-      >
-        {leftIcon}
-      </button>
+      {renderSlot(leftIcon, onLeft, leftSlotClass, leftLabel)}
       <h1 className="font-display text-[25px] font-bold leading-none">{title}</h1>
-      <button
-        type="button"
-        onClick={onRight}
-        className="grid h-10 w-10 place-items-center justify-self-end text-[var(--ink)]"
-      >
-        {rightIcon}
-      </button>
+      {renderSlot(rightIcon, onRight, rightSlotClass, rightLabel)}
     </header>
   );
 }
@@ -1475,7 +1559,12 @@ function TaskEditor({
       <div className="w-full max-w-[430px] rounded-t-[18px] bg-[var(--paper-soft)] p-6 shadow-2xl md:rounded-[18px]">
         <div className="flex items-center justify-between">
           <h2 className="font-display text-[22px] font-bold">Aufgabe bearbeiten</h2>
-          <button type="button" onClick={onClose} className="grid h-9 w-9 place-items-center">
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Schließen"
+            className="grid h-9 w-9 place-items-center"
+          >
             <X className="h-5 w-5" />
           </button>
         </div>
@@ -1665,7 +1754,7 @@ function DesktopSidebar({
       <div className="px-2">
         <p className="font-display text-[24px] font-bold">Rote Agenda</p>
         <p className="mt-2 text-[12px] leading-5 text-[var(--muted)]">
-          Der rote Faden für Capture, Aufgaben und Projekte.
+          Der rote Faden für deine Projekte.
         </p>
       </div>
       <div className="mt-6 space-y-1">
