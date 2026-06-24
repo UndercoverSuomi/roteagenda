@@ -60,6 +60,16 @@ Optional danach lokal wie Appwrite im Production-Modus starten:
 npm run start
 ```
 
+## Appwrite SDK
+
+Der Web SDK Client ist in `src/lib/appwrite.ts` konfiguriert:
+
+- Project ID: `6a3bbc6600236e6bf22a`
+- Endpoint: `https://fra.cloud.appwrite.io/v1`
+- Exports: `client`, `account`, `databases`
+
+Beim Öffnen der App wird automatisch `client.ping()` ausgeführt. Lokal funktioniert der Ping mit `http://localhost:3000`. Falls du über `http://127.0.0.1:3000` testest und CORS-Fehler siehst, füge in Appwrite Console unter deinem Projekt zusätzlich eine Web Platform für `127.0.0.1` hinzu oder nutze `localhost`.
+
 ## Referenzen
 
 - Appwrite Next.js Quickstart: https://appwrite.io/docs/products/sites/quick-start/nextjs

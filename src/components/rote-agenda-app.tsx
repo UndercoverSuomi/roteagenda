@@ -23,6 +23,7 @@ import {
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { client } from "@/lib/appwrite";
 import { processRawNote } from "@/lib/ai";
 import { formatDateLabel, toIsoDate } from "@/lib/date";
 import { createInitialData } from "@/lib/mock-data";
@@ -71,6 +72,10 @@ export function RoteAgendaApp() {
   const [activeSuggestions, setActiveSuggestions] = useState<AiSuggestion[]>([]);
   const [editingTask, setEditingTask] = useState<Task | null>(null);
   const [editingSuggestionId, setEditingSuggestionId] = useState<string | null>(null);
+
+  useEffect(() => {
+    void client.ping().catch(() => undefined);
+  }, []);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
