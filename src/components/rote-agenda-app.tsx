@@ -1,0 +1,1844 @@
+"use client";
+
+import Image from "next/image";
+import {
+  ArrowLeft,
+  Bell,
+  CheckSquare2,
+  ChevronRight,
+  Circle,
+  ClipboardList,
+  Edit3,
+  Flag,
+  FolderKanban,
+  Home,
+  Inbox,
+  Menu,
+  MoreHorizontal,
+  Plus,
+  Sparkles,
+  Square,
+  Tags,
+  Trash2,
+  X,
+} from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { processRawNote } from "@/lib/ai";
+import { formatDateLabel, toIsoDate } from "@/lib/date";
+import { createInitialData } from "@/lib/mock-data";
+import type {
+  AiSuggestion,
+  AppData,
+  Project,
+  Task,
+  TaskPriority,
+  TaskStatus,
+} from "@/lib/types";
+
+type Screen = "welcome" | "today" | "capture" | "inbox" | "projects" | "project" | "task" | "more";
+type TaskFilter = "all" | "today" | "planned" | "later";
+type ProjectDetailTab = "tasks" | "details" | "notes";
+
+const STORAGE_KEY = "rote-agenda-mvp";
+
+const priorityLabels: Record<TaskPriority, string> = {
+  low: "Niedrig",
+  medium: "Mittel",
+  high: "Hoch",
+};
+
+const statusLabels: Record<TaskStatus, string> = {
+  open: "Offen",
+  in_progress: "In Arbeit",
+  done: "Erledigt",
+};
+
+function cx(...classes: Array<string | false | null | undefined>) {
+  return classes.filter(Boolean).join(" ");
+}
+
+export function RoteAgendaApp() {
+  const [data, setData] = useState<AppData>(() => createInitialData());
+  const [isHydrated, setIsHydrated] = useState(false);
+  const [screen, setScreen] = useState<Screen>("welcome");
+  const [taskFilter, setTaskFilter] = useState<TaskFilter>("all");
+  const [projectTab, setProjectTab] = useState<ProjectDetailTab>("tasks");
+  const [selectedProjectId, setSelectedProjectId] = useState("project-marketing");
+  const [selectedTaskId, setSelectedTaskId] = useState("task-angebot");
+  const [captureText, setCaptureText] = useState("");
+  const [activeSuggestions, setActiveSuggestions] = useState<AiSuggestion[]>([]);
+  const [editingTask, setEditingTask] = useState<Task | null>(null);
+  const [editingSuggestionId, setEditingSuggestionId] = useState<string | null>(null);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      const saved = window.localStorage.getItem(STORAGE_KEY);
+      if (saved) {
+        try {
+          setData(JSON.parse(saved) as AppData);
+        } catch {
+          window.localStorage.removeItem(STORAGE_KEY);
+        }
+      }
+      setIsHydrated(true);
+    }, 0);
+
+    return () => window.clearTimeout(timer);
+  }, []);
+
+  useEffect(() => {
+    if (isHydrated) {
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+    }
+  }, [data, isHydrated]);
+
+  const selectedProject =
+    data.projects.find((project) => project.id === selectedProjectId) ??
+    data.projects[0];
+  const selectedTask =
+    data.tasks.find((task) => task.id === selectedTaskId) ?? data.tasks[0];
+
+  const projectById = useMemo(() => {
+    return new Map(data.projects.map((project) => [project.id, project]));
+  }, [data.projects]);
+
+  const pendingSuggestions = data.suggestions.filter(
+    (suggestion) => suggestion.state === "pending",
+  );
+
+  const visibleTasks = useMemo(() => {
+    const today = toIsoDate(new Date());
+    return data.tasks
+      .filter((task) => {
+        if (taskFilter === "today") return task.dueDate === today;
+        if (taskFilter === "planned") return Boolean(task.dueDate && task.dueDate > today);
+        if (taskFilter === "later") return !task.dueDate;
+        return true;
+      })
+      .sort((a, b) => {
+        if (a.status === "done" && b.status !== "done") return 1;
+        if (a.status !== "done" && b.status === "done") return -1;
+        return (a.dueDate ?? "9999").localeCompare(b.dueDate ?? "9999");
+      });
+  }, [data.tasks, taskFilter]);
+
+  function navigate(nextScreen: Screen) {
+    setScreen(nextScreen);
+  }
+
+  function openProject(projectId: string) {
+    setSelectedProjectId(projectId);
+    setProjectTab("tasks");
+    setScreen("project");
+  }
+
+  function openTask(taskId: string) {
+    const task = data.tasks.find((item) => item.id === taskId);
+    if (task) {
+      setSelectedTaskId(taskId);
+      setSelectedProjectId(task.projectId);
+      setScreen("task");
+    }
+  }
+
+  function handleProcessNote() {
+    const trimmed = captureText.trim();
+    if (!trimmed) return;
+
+    const result = processRawNote(trimmed, data.projects);
+    setData((current) => ({
+      ...current,
+      rawNotes: [result.rawNote, ...current.rawNotes],
+      suggestions: [...result.suggestions, ...current.suggestions],
+    }));
+    setActiveSuggestions(result.suggestions);
+    setCaptureText("");
+  }
+
+  function updateSuggestion(updated: AiSuggestion) {
+    setActiveSuggestions((current) =>
+      current.map((suggestion) => (suggestion.id === updated.id ? updated : suggestion)),
+    );
+    setData((current) => ({
+      ...current,
+      suggestions: current.suggestions.map((suggestion) =>
+        suggestion.id === updated.id ? updated : suggestion,
+      ),
+    }));
+  }
+
+  function acceptSuggestion(suggestion: AiSuggestion, createdBy: "ai" | "user" = "ai") {
+    const now = new Date().toISOString();
+    let projectId = suggestion.suggestedProjectId;
+    let newProject: Project | null = null;
+
+    if (!projectId) {
+      projectId = `project-${Date.now().toString(36)}`;
+      newProject = {
+        id: projectId,
+        title: suggestion.suggestedNewProjectTitle ?? "Neues Projekt",
+        description: "Von Rote Agenda aus einer Rohnotiz vorgeschlagen.",
+        keywords: suggestion.suggestedTitle
+          .toLowerCase()
+          .split(/\s+/)
+          .filter((word) => word.length > 4)
+          .slice(0, 6),
+        progress: 0,
+        aiEnabled: true,
+        createdAt: now,
+        updatedAt: now,
+      };
+    }
+
+    const task: Task = {
+      id: `task-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
+      title: suggestion.suggestedTitle,
+      description: suggestion.suggestedDescription,
+      projectId,
+      status: "open",
+      priority: suggestion.priority,
+      dueDate: suggestion.dueDate,
+      sourceNoteId: suggestion.rawNoteId,
+      createdBy,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    const acceptedSuggestion = {
+      ...suggestion,
+      state: "accepted" as const,
+      needsReview: false,
+    };
+
+    setData((current) => ({
+      ...current,
+      projects: newProject ? [newProject, ...current.projects] : current.projects,
+      tasks: [task, ...current.tasks],
+      suggestions: current.suggestions.map((item) =>
+        item.id === suggestion.id ? acceptedSuggestion : item,
+      ),
+    }));
+    setActiveSuggestions((current) =>
+      current.map((item) => (item.id === suggestion.id ? acceptedSuggestion : item)),
+    );
+    setSelectedTaskId(task.id);
+    setSelectedProjectId(projectId);
+    setScreen("today");
+  }
+
+  function rejectSuggestion(suggestionId: string) {
+    setData((current) => ({
+      ...current,
+      suggestions: current.suggestions.map((suggestion) =>
+        suggestion.id === suggestionId
+          ? { ...suggestion, state: "rejected" as const }
+          : suggestion,
+      ),
+    }));
+    setActiveSuggestions((current) =>
+      current.map((suggestion) =>
+        suggestion.id === suggestionId
+          ? { ...suggestion, state: "rejected" as const }
+          : suggestion,
+      ),
+    );
+  }
+
+  function toggleTask(taskId: string) {
+    setData((current) => ({
+      ...current,
+      tasks: current.tasks.map((task) =>
+        task.id === taskId
+          ? {
+              ...task,
+              status: task.status === "done" ? "open" : "done",
+              updatedAt: new Date().toISOString(),
+            }
+          : task,
+      ),
+    }));
+  }
+
+  function saveTask(task: Task) {
+    setData((current) => {
+      const exists = current.tasks.some((item) => item.id === task.id);
+      return {
+        ...current,
+        tasks: exists
+          ? current.tasks.map((item) => (item.id === task.id ? task : item))
+          : [task, ...current.tasks],
+      };
+    });
+    setSelectedTaskId(task.id);
+    setSelectedProjectId(task.projectId);
+    setEditingTask(null);
+  }
+
+  function deleteTask(taskId: string) {
+    setData((current) => ({
+      ...current,
+      tasks: current.tasks.filter((task) => task.id !== taskId),
+    }));
+    setEditingTask(null);
+    setScreen("today");
+  }
+
+  function toggleProjectAi(projectId: string) {
+    setData((current) => ({
+      ...current,
+      projects: current.projects.map((project) =>
+        project.id === projectId
+          ? { ...project, aiEnabled: !project.aiEnabled, updatedAt: new Date().toISOString() }
+          : project,
+      ),
+    }));
+  }
+
+  function createBlankTask(projectId = selectedProject?.id ?? data.projects[0].id) {
+    const now = new Date().toISOString();
+    setEditingTask({
+      id: `task-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
+      title: "",
+      description: "",
+      projectId,
+      status: "open",
+      priority: "medium",
+      dueDate: null,
+      sourceNoteId: null,
+      createdBy: "user",
+      createdAt: now,
+      updatedAt: now,
+    });
+  }
+
+  const screenContent = (() => {
+    if (screen === "welcome") {
+      return <WelcomeScreen onStart={() => navigate("today")} />;
+    }
+
+    if (screen === "capture") {
+      return (
+        <CaptureScreen
+          captureText={captureText}
+          suggestions={activeSuggestions}
+          projects={data.projects}
+          editingSuggestionId={editingSuggestionId}
+          onBack={() => navigate("today")}
+          onChangeText={setCaptureText}
+          onProcess={handleProcessNote}
+          onAccept={acceptSuggestion}
+          onReject={rejectSuggestion}
+          onEditSuggestion={setEditingSuggestionId}
+          onUpdateSuggestion={updateSuggestion}
+        />
+      );
+    }
+
+    if (screen === "inbox") {
+      return (
+        <InboxScreen
+          suggestions={pendingSuggestions}
+          projects={data.projects}
+          editingSuggestionId={editingSuggestionId}
+          onEditSuggestion={setEditingSuggestionId}
+          onUpdateSuggestion={updateSuggestion}
+          onAccept={acceptSuggestion}
+          onReject={rejectSuggestion}
+        />
+      );
+    }
+
+    if (screen === "projects") {
+      return (
+        <ProjectsScreen
+          projects={data.projects}
+          tasks={data.tasks}
+          onOpenProject={openProject}
+        />
+      );
+    }
+
+    if (screen === "project" && selectedProject) {
+      return (
+        <ProjectDetailScreen
+          project={selectedProject}
+          tasks={data.tasks.filter((task) => task.projectId === selectedProject.id)}
+          tab={projectTab}
+          onBack={() => navigate("projects")}
+          onTabChange={setProjectTab}
+          onOpenTask={openTask}
+          onToggleTask={toggleTask}
+          onAddTask={() => createBlankTask(selectedProject.id)}
+          onToggleAi={() => toggleProjectAi(selectedProject.id)}
+        />
+      );
+    }
+
+    if (screen === "task" && selectedTask) {
+      return (
+        <TaskDetailScreen
+          task={selectedTask}
+          project={projectById.get(selectedTask.projectId)}
+          rawNote={data.rawNotes.find((note) => note.id === selectedTask.sourceNoteId)}
+          suggestion={data.suggestions.find(
+            (suggestion) => suggestion.rawNoteId === selectedTask.sourceNoteId,
+          )}
+          onBack={() => navigate("today")}
+          onEdit={() => setEditingTask(selectedTask)}
+          onToggleDone={() => toggleTask(selectedTask.id)}
+          onOpenProject={() => openProject(selectedTask.projectId)}
+        />
+      );
+    }
+
+    if (screen === "more") {
+      return <MoreScreen onReset={() => setData(createInitialData())} />;
+    }
+
+    return (
+      <TodayScreen
+        tasks={visibleTasks}
+        projects={projectById}
+        filter={taskFilter}
+        pendingCount={pendingSuggestions.length}
+        onFilterChange={setTaskFilter}
+        onOpenTask={openTask}
+        onToggleTask={toggleTask}
+        onCapture={() => navigate("capture")}
+      />
+    );
+  })();
+
+  return (
+    <main className="min-h-screen bg-[var(--paper)] text-[var(--ink)] md:p-6">
+      <div
+        className={cx(
+          "mx-auto grid min-h-screen w-full max-w-7xl items-start gap-6 md:min-h-0",
+          screen === "welcome"
+            ? "md:grid-cols-[minmax(360px,430px)] md:justify-center"
+            : "md:grid-cols-[248px_minmax(360px,430px)_minmax(280px,1fr)]",
+        )}
+      >
+        {screen !== "welcome" ? (
+          <DesktopSidebar
+            screen={screen}
+            pendingCount={pendingSuggestions.length}
+            onNavigate={navigate}
+          />
+        ) : null}
+
+        <PhoneShell hasBottomNav={screen !== "welcome"}>
+          {screenContent}
+          {screen !== "welcome" ? (
+            <BottomNav
+              screen={screen}
+              pendingCount={pendingSuggestions.length}
+              onNavigate={navigate}
+            />
+          ) : null}
+        </PhoneShell>
+
+        {screen !== "welcome" ? (
+          <DesktopInsightPanel
+            data={data}
+            selectedProject={selectedProject}
+            onCapture={() => navigate("capture")}
+            onOpenInbox={() => navigate("inbox")}
+          />
+        ) : null}
+      </div>
+
+      {editingTask ? (
+        <TaskEditor
+          task={editingTask}
+          projects={data.projects}
+          onClose={() => setEditingTask(null)}
+          onDelete={deleteTask}
+          onSave={saveTask}
+        />
+      ) : null}
+    </main>
+  );
+}
+
+function PhoneShell({
+  children,
+  hasBottomNav,
+}: {
+  children: React.ReactNode;
+  hasBottomNav: boolean;
+}) {
+  return (
+    <section className="phone-shadow relative mx-auto flex min-h-[100dvh] w-full max-w-[430px] flex-col overflow-hidden bg-[var(--paper-soft)] md:min-h-[860px] md:rounded-[18px]">
+      <StatusBar />
+      <div className={cx("flex min-h-0 flex-1 flex-col", hasBottomNav && "pb-[92px]")}>
+        {children}
+      </div>
+    </section>
+  );
+}
+
+function StatusBar() {
+  return (
+    <div className="z-20 flex h-12 shrink-0 items-center justify-between px-8 text-[14px] font-extrabold tracking-[-0.01em] text-black">
+      <span>9:41</span>
+      <div className="flex items-center gap-1.5">
+        <span className="h-3 w-4 rounded-sm border border-black">
+          <span className="block h-full w-3 rounded-[1px] bg-black" />
+        </span>
+        <span className="h-3 w-4 rounded-sm border border-black">
+          <span className="block h-full w-2.5 rounded-[1px] bg-black" />
+        </span>
+        <span className="h-3 w-6 rounded-[3px] border border-black p-[1px]">
+          <span className="block h-full w-4 rounded-[1px] bg-black" />
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function WelcomeScreen({ onStart }: { onStart: () => void }) {
+  return (
+    <div className="relative flex flex-1 overflow-hidden">
+      <Image
+        src="/welcome-movement.png"
+        alt="Bewegungssilhouette mit roter Flagge"
+        fill
+        priority
+        sizes="(max-width: 768px) 100vw, 430px"
+        className="object-cover"
+      />
+      <div className="relative z-10 flex flex-1 flex-col px-8 pb-8 pt-[22vh]">
+        <div className="ml-[35%] max-w-[230px]">
+          <h1 className="font-display text-[42px] font-bold leading-[1.05] tracking-[-0.02em] text-[var(--green)]">
+            Rote Agenda
+          </h1>
+          <p className="mt-6 font-display text-[17px] font-bold leading-7 text-[var(--ink)]">
+            Der rote Faden für deine Projekte.
+          </p>
+          <div className="mt-8 h-0.5 w-10 bg-[var(--red)]" />
+          <p className="mt-6 max-w-[210px] font-display text-[14px] italic leading-6 text-[var(--ink-soft)]">
+            Organisiere Gedanken. Strukturiere Projekte. Verändere die Welt.
+          </p>
+        </div>
+
+        <div className="mt-auto space-y-8">
+          <button
+            type="button"
+            onClick={onStart}
+            className="flex h-15 w-full items-center justify-between rounded-[6px] border border-white/70 bg-[var(--green)] px-8 font-display text-[16px] font-bold text-[var(--cream)] shadow-lg shadow-black/10 transition hover:bg-[var(--green-2)]"
+          >
+            <span>Los geht&apos;s</span>
+            <ChevronRight className="h-5 w-5" />
+          </button>
+          <button
+            type="button"
+            onClick={onStart}
+            className="mx-auto block text-[13px] font-bold underline underline-offset-2"
+          >
+            Anmelden
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TodayScreen({
+  tasks,
+  projects,
+  filter,
+  pendingCount,
+  onFilterChange,
+  onOpenTask,
+  onToggleTask,
+  onCapture,
+}: {
+  tasks: Task[];
+  projects: Map<string, Project>;
+  filter: TaskFilter;
+  pendingCount: number;
+  onFilterChange: (filter: TaskFilter) => void;
+  onOpenTask: (taskId: string) => void;
+  onToggleTask: (taskId: string) => void;
+  onCapture: () => void;
+}) {
+  return (
+    <div className="flex flex-1 flex-col px-6 pt-3">
+      <ScreenHeader title="Heute" leftIcon={<Menu className="h-6 w-6" />} rightIcon={<Bell className="h-5 w-5" />} />
+
+      <button
+        type="button"
+        onClick={onCapture}
+        className="mt-6 flex h-[68px] items-center justify-between rounded-[6px] bg-[var(--green)] p-3 pl-5 text-left text-[14px] font-medium text-white shadow-md shadow-black/10"
+      >
+        <span>Was beschäftigt dich?</span>
+        <span className="grid h-11 w-11 place-items-center rounded-[4px] bg-[var(--red)]">
+          <Plus className="h-6 w-6" />
+        </span>
+      </button>
+
+      <section className="mt-5 rounded-[5px] border border-[var(--line)] bg-white/50 p-4 shadow-sm">
+        <div className="flex items-center justify-between gap-4">
+          <div className="flex items-center gap-2 text-[11px] font-extrabold uppercase tracking-[0.03em]">
+            <Sparkles className="h-4 w-4 text-[var(--green)]" />
+            KI-Update
+          </div>
+          <ChevronRight className="h-5 w-5" />
+        </div>
+        <p className="mt-4 text-[13px] font-bold">8 neue Einträge verarbeitet</p>
+        <div className="mt-4 grid grid-cols-3 gap-2 text-[11px] font-semibold">
+          <span>6 zugeordnet</span>
+          <span>1 erstellt</span>
+          <span>{pendingCount || 1} benötigt Hilfe</span>
+        </div>
+      </section>
+
+      <div className="mt-9 flex items-end justify-between">
+        <h2 className="font-display text-[20px] font-bold">Meine Aufgaben</h2>
+        <button type="button" className="text-[12px] font-semibold underline underline-offset-2">
+          Alle anzeigen
+        </button>
+      </div>
+
+      <TaskTabs value={filter} onChange={onFilterChange} />
+
+      <div className="mt-3 divide-y divide-[var(--line)]">
+        {tasks.length ? (
+          tasks.map((task) => (
+            <TaskRow
+              key={task.id}
+              task={task}
+              project={projects.get(task.projectId)}
+              onOpen={() => onOpenTask(task.id)}
+              onToggle={() => onToggleTask(task.id)}
+            />
+          ))
+        ) : (
+          <EmptyState
+            title="Keine Aufgaben in dieser Ansicht"
+            text="Alles ruhig. Neue Rohnotizen landen zuerst im Capture."
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function CaptureScreen({
+  captureText,
+  suggestions,
+  projects,
+  editingSuggestionId,
+  onBack,
+  onChangeText,
+  onProcess,
+  onAccept,
+  onReject,
+  onEditSuggestion,
+  onUpdateSuggestion,
+}: {
+  captureText: string;
+  suggestions: AiSuggestion[];
+  projects: Project[];
+  editingSuggestionId: string | null;
+  onBack: () => void;
+  onChangeText: (value: string) => void;
+  onProcess: () => void;
+  onAccept: (suggestion: AiSuggestion, createdBy?: "ai" | "user") => void;
+  onReject: (suggestionId: string) => void;
+  onEditSuggestion: (suggestionId: string | null) => void;
+  onUpdateSuggestion: (suggestion: AiSuggestion) => void;
+}) {
+  return (
+    <div className="flex flex-1 flex-col px-6 pt-3">
+      <ScreenHeader
+        title="Schnellnotiz"
+        leftIcon={<ArrowLeft className="h-5 w-5" />}
+        onLeft={onBack}
+        rightIcon={<Sparkles className="h-5 w-5" />}
+      />
+
+      <div className="mt-8 rounded-[7px] border border-[var(--line)] bg-white/55 p-4">
+        <textarea
+          value={captureText}
+          onChange={(event) => onChangeText(event.target.value)}
+          placeholder="Schreib einfach alles rein – Gedanken, Aufgaben, Notizen, Gesprächsfetzen…"
+          className="min-h-44 w-full resize-none bg-transparent text-[16px] leading-7 outline-none placeholder:text-[var(--muted)]"
+        />
+        <button
+          type="button"
+          onClick={onProcess}
+          disabled={!captureText.trim()}
+          className="mt-4 flex h-13 w-full items-center justify-center gap-2 rounded-[5px] bg-[var(--red)] px-5 text-[14px] font-bold text-white shadow-sm transition hover:bg-[var(--red-dark)] disabled:opacity-50"
+        >
+          <Sparkles className="h-4 w-4" />
+          Mit KI verarbeiten
+        </button>
+      </div>
+
+      <div className="mt-6 space-y-4">
+        {suggestions.length ? (
+          suggestions.map((suggestion) => (
+            <SuggestionCard
+              key={suggestion.id}
+              suggestion={suggestion}
+              projects={projects}
+              isEditing={editingSuggestionId === suggestion.id}
+              onAccept={() => onAccept(suggestion)}
+              onCreateTask={() => onAccept(suggestion, "user")}
+              onReject={() => onReject(suggestion.id)}
+              onEdit={() => onEditSuggestion(suggestion.id)}
+              onCancelEdit={() => onEditSuggestion(null)}
+              onUpdate={(updated) => {
+                onUpdateSuggestion(updated);
+                onEditSuggestion(null);
+              }}
+            />
+          ))
+        ) : (
+          <div className="rounded-[7px] border border-dashed border-[var(--line-strong)] p-5 text-[13px] leading-6 text-[var(--muted)]">
+            Beispiele: „Chef meinte, ich soll bis Freitag nochmal die Präsentation
+            überarbeiten“ oder „Idee: Register-Fälle automatisch clustern“.
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function InboxScreen({
+  suggestions,
+  projects,
+  editingSuggestionId,
+  onEditSuggestion,
+  onUpdateSuggestion,
+  onAccept,
+  onReject,
+}: {
+  suggestions: AiSuggestion[];
+  projects: Project[];
+  editingSuggestionId: string | null;
+  onEditSuggestion: (suggestionId: string | null) => void;
+  onUpdateSuggestion: (suggestion: AiSuggestion) => void;
+  onAccept: (suggestion: AiSuggestion, createdBy?: "ai" | "user") => void;
+  onReject: (suggestionId: string) => void;
+}) {
+  return (
+    <div className="flex flex-1 flex-col px-6 pt-3">
+      <ScreenHeader title="Inbox" leftIcon={<Inbox className="h-5 w-5" />} rightIcon={<MoreHorizontal className="h-5 w-5" />} />
+      <p className="mt-5 text-[13px] leading-6 text-[var(--muted)]">
+        Ungeprüfte KI-Vorschläge bleiben hier, bis du sie annimmst, änderst oder ablehnst.
+      </p>
+
+      <div className="mt-6 space-y-4">
+        {suggestions.length ? (
+          suggestions.map((suggestion) => (
+            <SuggestionCard
+              key={suggestion.id}
+              suggestion={suggestion}
+              projects={projects}
+              isEditing={editingSuggestionId === suggestion.id}
+              compact
+              onAccept={() => onAccept(suggestion)}
+              onCreateTask={() => onAccept(suggestion, "user")}
+              onReject={() => onReject(suggestion.id)}
+              onEdit={() => onEditSuggestion(suggestion.id)}
+              onCancelEdit={() => onEditSuggestion(null)}
+              onUpdate={(updated) => {
+                onUpdateSuggestion(updated);
+                onEditSuggestion(null);
+              }}
+            />
+          ))
+        ) : (
+          <EmptyState title="Inbox ist leer" text="Alle Vorschläge sind geprüft." />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ProjectsScreen({
+  projects,
+  tasks,
+  onOpenProject,
+}: {
+  projects: Project[];
+  tasks: Task[];
+  onOpenProject: (projectId: string) => void;
+}) {
+  return (
+    <div className="flex flex-1 flex-col px-6 pt-3">
+      <ScreenHeader title="Projekte" leftIcon={<FolderKanban className="h-5 w-5" />} rightIcon={<MoreHorizontal className="h-5 w-5" />} />
+      <div className="mt-6 space-y-4">
+        {projects.map((project) => {
+          const projectTasks = tasks.filter((task) => task.projectId === project.id);
+          const openTasks = projectTasks.filter((task) => task.status !== "done").length;
+          const nextDeadline = projectTasks
+            .map((task) => task.dueDate)
+            .filter(Boolean)
+            .sort()[0] as string | undefined;
+          const progress = projectProgress(project, projectTasks);
+
+          return (
+            <button
+              type="button"
+              key={project.id}
+              onClick={() => onOpenProject(project.id)}
+              className="w-full rounded-[7px] border border-[var(--line)] bg-white/45 p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:bg-white/70"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <h2 className="font-display text-[20px] font-bold leading-7">
+                    {project.title}
+                  </h2>
+                  <p className="mt-2 line-clamp-2 text-[12px] leading-5 text-[var(--muted)]">
+                    {project.description}
+                  </p>
+                </div>
+                <ChevronRight className="mt-1 h-5 w-5 shrink-0" />
+              </div>
+              <div className="mt-4 flex items-center justify-between text-[12px] font-semibold">
+                <span>{openTasks} offen</span>
+                <span>{nextDeadline ? formatDateLabel(nextDeadline) : "Ohne Deadline"}</span>
+              </div>
+              <ProgressBar value={progress} className="mt-3" />
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function ProjectDetailScreen({
+  project,
+  tasks,
+  tab,
+  onBack,
+  onTabChange,
+  onOpenTask,
+  onToggleTask,
+  onAddTask,
+  onToggleAi,
+}: {
+  project: Project;
+  tasks: Task[];
+  tab: ProjectDetailTab;
+  onBack: () => void;
+  onTabChange: (tab: ProjectDetailTab) => void;
+  onOpenTask: (taskId: string) => void;
+  onToggleTask: (taskId: string) => void;
+  onAddTask: () => void;
+  onToggleAi: () => void;
+}) {
+  const progress = projectProgress(project, tasks);
+
+  return (
+    <div className="flex flex-1 flex-col pt-3">
+      <div className="px-6">
+        <ScreenHeader
+          title=""
+          leftIcon={<ArrowLeft className="h-5 w-5" />}
+          rightIcon={<MoreHorizontal className="h-5 w-5" />}
+          onLeft={onBack}
+        />
+        <p className="mt-8 text-[11px] font-extrabold uppercase tracking-[0.05em] text-[var(--red)]">
+          Projekt
+        </p>
+        <h1 className="mt-4 font-display text-[29px] font-bold leading-tight">
+          {project.title}
+        </h1>
+        <div className="mt-8 flex items-center justify-between text-[13px]">
+          <span>Fortschritt</span>
+          <span>{progress}%</span>
+        </div>
+        <ProgressBar value={progress} className="mt-3" />
+      </div>
+
+      <DetailTabs
+        value={tab}
+        onChange={(value) => onTabChange(value as ProjectDetailTab)}
+        tabs={["tasks", "details", "notes"]}
+        labels={{ tasks: "Aufgaben", details: "Details", notes: "Notizen" }}
+      />
+
+      <div className="px-6">
+        {tab === "tasks" ? (
+          <div className="divide-y divide-[var(--line)]">
+            {tasks.map((task) => (
+              <TaskLine
+                key={task.id}
+                task={task}
+                onOpen={() => onOpenTask(task.id)}
+                onToggle={() => onToggleTask(task.id)}
+              />
+            ))}
+            <button
+              type="button"
+              onClick={onAddTask}
+              className="mt-7 flex items-center gap-3 text-[14px] font-semibold text-[var(--red)]"
+            >
+              <Plus className="h-4 w-4" />
+              Aufgabe hinzufügen
+            </button>
+          </div>
+        ) : null}
+
+        {tab === "details" ? (
+          <div className="space-y-5 pt-5">
+            <p className="text-[14px] leading-7 text-[var(--ink-soft)]">
+              {project.description}
+            </p>
+            <button
+              type="button"
+              onClick={onToggleAi}
+              className="flex w-full items-center justify-between rounded-[6px] border border-[var(--line)] bg-white/45 p-4 text-left"
+            >
+              <span>
+                <span className="block text-[13px] font-bold">KI-Zuordnung</span>
+                <span className="text-[12px] text-[var(--muted)]">
+                  Für dieses Projekt {project.aiEnabled ? "aktiv" : "pausiert"}
+                </span>
+              </span>
+              <span
+                className={cx(
+                  "flex h-7 w-12 items-center rounded-full p-1 transition",
+                  project.aiEnabled ? "bg-[var(--red)]" : "bg-[var(--line-strong)]",
+                )}
+              >
+                <span
+                  className={cx(
+                    "h-5 w-5 rounded-full bg-white transition",
+                    project.aiEnabled && "translate-x-5",
+                  )}
+                />
+              </span>
+            </button>
+            <div>
+              <p className="text-[12px] font-bold uppercase tracking-[0.04em] text-[var(--muted)]">
+                Keywords
+              </p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                {project.keywords.map((keyword) => (
+                  <span
+                    key={keyword}
+                    className="rounded-full border border-[var(--line)] px-3 py-1 text-[12px]"
+                  >
+                    {keyword}
+                  </span>
+                ))}
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        {tab === "notes" ? (
+          <div className="pt-5 text-[14px] leading-7 text-[var(--muted)]">
+            Noch keine Projektnotizen. Rohnotizen aus Capture können später hier
+            gesammelt werden.
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function TaskDetailScreen({
+  task,
+  project,
+  rawNote,
+  suggestion,
+  onBack,
+  onEdit,
+  onToggleDone,
+  onOpenProject,
+}: {
+  task: Task;
+  project?: Project;
+  rawNote?: { content: string } | undefined;
+  suggestion?: AiSuggestion | undefined;
+  onBack: () => void;
+  onEdit: () => void;
+  onToggleDone: () => void;
+  onOpenProject: () => void;
+}) {
+  return (
+    <div className="flex flex-1 flex-col pt-3">
+      <div className="px-6">
+        <ScreenHeader
+          title=""
+          leftIcon={<ArrowLeft className="h-5 w-5" />}
+          rightIcon={<Edit3 className="h-5 w-5" />}
+          onLeft={onBack}
+          onRight={onEdit}
+        />
+        <p className="mt-8 text-[11px] font-extrabold uppercase tracking-[0.05em] text-[var(--red)]">
+          {project?.title ?? "Aufgabe"}
+        </p>
+        <h1 className="mt-4 font-display text-[29px] font-bold leading-tight">
+          {task.title}
+        </h1>
+        <div className="mt-7 grid grid-cols-2 gap-3 text-[12px]">
+          <InfoTile label="Status" value={statusLabels[task.status]} />
+          <InfoTile label="Deadline" value={formatDateLabel(task.dueDate)} />
+          <InfoTile label="Priorität" value={priorityLabels[task.priority]} />
+          <button
+            type="button"
+            onClick={onOpenProject}
+            className="rounded-[6px] border border-[var(--line)] bg-white/45 p-3 text-left"
+          >
+            <span className="block text-[10px] font-bold uppercase tracking-[0.05em] text-[var(--muted)]">
+              Projekt
+            </span>
+            <span className="mt-1 block font-bold">{project?.title ?? "Ohne Projekt"}</span>
+          </button>
+        </div>
+      </div>
+
+      <DetailTabs
+        value="details"
+        onChange={() => undefined}
+        tabs={["details", "notes", "tasks"]}
+        labels={{ details: "Details", notes: "Rohnotiz", tasks: "KI" }}
+      />
+
+      <div className="space-y-5 px-6">
+        <label className="flex items-center gap-3 rounded-[6px] border border-[var(--line)] bg-white/45 p-4 text-[14px] font-bold">
+          <button
+            type="button"
+            onClick={onToggleDone}
+            className="grid h-6 w-6 place-items-center text-[var(--red)]"
+          >
+            {task.status === "done" ? <CheckSquare2 className="h-5 w-5" /> : <Square className="h-5 w-5" />}
+          </button>
+          Erledigt
+        </label>
+        <section>
+          <h2 className="text-[12px] font-bold uppercase tracking-[0.04em] text-[var(--muted)]">
+            Beschreibung
+          </h2>
+          <p className="mt-2 text-[14px] leading-7 text-[var(--ink-soft)]">
+            {task.description || "Keine Beschreibung hinterlegt."}
+          </p>
+        </section>
+        <section>
+          <h2 className="text-[12px] font-bold uppercase tracking-[0.04em] text-[var(--muted)]">
+            Ursprüngliche Rohnotiz
+          </h2>
+          <p className="mt-2 rounded-[6px] bg-white/45 p-4 text-[13px] leading-6 text-[var(--muted)]">
+            {rawNote?.content ?? "Diese Aufgabe wurde manuell erstellt."}
+          </p>
+        </section>
+        <section>
+          <h2 className="text-[12px] font-bold uppercase tracking-[0.04em] text-[var(--muted)]">
+            KI-Zusammenfassung
+          </h2>
+          <p className="mt-2 text-[13px] leading-6 text-[var(--ink-soft)]">
+            {suggestion?.reasoning ?? "Keine KI-Zusammenfassung vorhanden."}
+          </p>
+        </section>
+      </div>
+    </div>
+  );
+}
+
+function MoreScreen({ onReset }: { onReset: () => void }) {
+  return (
+    <div className="flex flex-1 flex-col px-6 pt-3">
+      <ScreenHeader title="Mehr" leftIcon={<MoreHorizontal className="h-5 w-5" />} />
+      <div className="mt-8 space-y-3">
+        <InfoTile label="App" value="Rote Agenda MVP" />
+        <InfoTile label="Speicherung" value="Lokal im Browser" />
+        <button
+          type="button"
+          onClick={onReset}
+          className="flex w-full items-center justify-between rounded-[6px] border border-[var(--line)] bg-white/45 p-4 text-[13px] font-bold text-[var(--red)]"
+        >
+          Demo-Daten zurücksetzen
+          <Trash2 className="h-4 w-4" />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function ScreenHeader({
+  title,
+  leftIcon,
+  rightIcon,
+  onLeft,
+  onRight,
+}: {
+  title: string;
+  leftIcon?: React.ReactNode;
+  rightIcon?: React.ReactNode;
+  onLeft?: () => void;
+  onRight?: () => void;
+}) {
+  return (
+    <header className="grid h-10 grid-cols-[44px_1fr_44px] items-center">
+      <button
+        type="button"
+        onClick={onLeft}
+        className="grid h-10 w-10 place-items-center text-[var(--ink)]"
+      >
+        {leftIcon}
+      </button>
+      <h1 className="font-display text-[25px] font-bold leading-none">{title}</h1>
+      <button
+        type="button"
+        onClick={onRight}
+        className="grid h-10 w-10 place-items-center justify-self-end text-[var(--ink)]"
+      >
+        {rightIcon}
+      </button>
+    </header>
+  );
+}
+
+function TaskTabs({
+  value,
+  onChange,
+}: {
+  value: TaskFilter;
+  onChange: (filter: TaskFilter) => void;
+}) {
+  const tabs: Array<{ value: TaskFilter; label: string }> = [
+    { value: "all", label: "Alle" },
+    { value: "today", label: "Heute" },
+    { value: "planned", label: "Geplant" },
+    { value: "later", label: "Später" },
+  ];
+
+  return (
+    <div className="mt-6 grid grid-cols-4 border-b border-[var(--line)] text-[14px] font-medium">
+      {tabs.map((tab) => (
+        <button
+          type="button"
+          key={tab.value}
+          onClick={() => onChange(tab.value)}
+          className={cx(
+            "relative h-10",
+            value === tab.value && "font-bold text-[var(--ink)]",
+          )}
+        >
+          {tab.label}
+          {value === tab.value ? (
+            <span className="absolute inset-x-2 bottom-[-1px] h-0.5 bg-[var(--red)]" />
+          ) : null}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function DetailTabs({
+  value,
+  onChange,
+  tabs,
+  labels,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  tabs: string[];
+  labels: Record<string, string>;
+}) {
+  return (
+    <div className="mt-8 grid grid-cols-3 border-y border-[var(--line)] text-[14px] font-medium">
+      {tabs.map((tab) => (
+        <button
+          type="button"
+          key={tab}
+          onClick={() => onChange(tab)}
+          className={cx("relative h-14", value === tab && "font-bold")}
+        >
+          {labels[tab]}
+          {value === tab ? (
+            <span className="absolute inset-x-6 bottom-[-1px] h-0.5 bg-[var(--red)]" />
+          ) : null}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function TaskRow({
+  task,
+  project,
+  onOpen,
+  onToggle,
+}: {
+  task: Task;
+  project?: Project;
+  onOpen: () => void;
+  onToggle: () => void;
+}) {
+  return (
+    <div className="flex min-h-[66px] items-center gap-3 py-3">
+      <button
+        type="button"
+        onClick={onToggle}
+        className="grid h-8 w-8 shrink-0 place-items-center text-[var(--red)]"
+      >
+        {task.status === "done" ? (
+          <CheckSquare2 className="h-5 w-5 fill-[var(--red)] text-white" />
+        ) : task.priority === "high" ? (
+          <Flag className="h-5 w-5 fill-[var(--red)] text-[var(--red)]" />
+        ) : (
+          <Circle className="h-5 w-5" />
+        )}
+      </button>
+      <button type="button" onClick={onOpen} className="min-w-0 flex-1 text-left">
+        <p
+          className={cx(
+            "truncate text-[14px] font-semibold",
+            task.status === "done" && "text-[var(--muted)] line-through",
+          )}
+        >
+          {task.title}
+        </p>
+        <p className="mt-1 truncate text-[12px] text-[var(--muted)]">
+          {project?.title ?? "Ohne Projekt"}
+        </p>
+      </button>
+      <span className="shrink-0 text-[12px] text-[var(--ink-soft)]">
+        {formatDateLabel(task.dueDate)}
+      </span>
+    </div>
+  );
+}
+
+function TaskLine({
+  task,
+  onOpen,
+  onToggle,
+}: {
+  task: Task;
+  onOpen: () => void;
+  onToggle: () => void;
+}) {
+  return (
+    <div className="flex min-h-[62px] items-center gap-3 py-3">
+      <button type="button" onClick={onToggle} className="text-[var(--red)]">
+        {task.status === "done" ? (
+          <CheckSquare2 className="h-5 w-5 fill-[var(--red)] text-white" />
+        ) : (
+          <Square className="h-5 w-5" />
+        )}
+      </button>
+      <button type="button" onClick={onOpen} className="min-w-0 flex-1 text-left">
+        <span className="block truncate text-[14px] font-medium">{task.title}</span>
+      </button>
+      <span className="text-[12px] text-[var(--ink-soft)]">{formatDateLabel(task.dueDate)}</span>
+    </div>
+  );
+}
+
+function SuggestionCard({
+  suggestion,
+  projects,
+  isEditing,
+  compact,
+  onAccept,
+  onCreateTask,
+  onReject,
+  onEdit,
+  onCancelEdit,
+  onUpdate,
+}: {
+  suggestion: AiSuggestion;
+  projects: Project[];
+  isEditing: boolean;
+  compact?: boolean;
+  onAccept: () => void;
+  onCreateTask: () => void;
+  onReject: () => void;
+  onEdit: () => void;
+  onCancelEdit: () => void;
+  onUpdate: (suggestion: AiSuggestion) => void;
+}) {
+  const project = projects.find((item) => item.id === suggestion.suggestedProjectId);
+
+  if (suggestion.state !== "pending") {
+    return (
+      <div className="rounded-[7px] border border-[var(--line)] bg-white/45 p-4 text-[13px] font-bold text-[var(--muted)]">
+        Vorschlag {suggestion.state === "accepted" ? "übernommen" : "ignoriert"}.
+      </div>
+    );
+  }
+
+  if (isEditing) {
+    return (
+      <SuggestionEditor
+        suggestion={suggestion}
+        projects={projects}
+        onCancel={onCancelEdit}
+        onSave={onUpdate}
+      />
+    );
+  }
+
+  return (
+    <article className="rounded-[7px] border border-[var(--line)] bg-white/55 p-4 shadow-sm">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-[11px] font-extrabold uppercase tracking-[0.04em] text-[var(--red)]">
+            {suggestionStatus(suggestion)}
+          </p>
+          <h2 className="mt-2 font-display text-[20px] font-bold leading-7">
+            {suggestion.suggestedTitle}
+          </h2>
+        </div>
+        <span className="rounded-full bg-[var(--green)] px-2.5 py-1 text-[11px] font-bold text-white">
+          {Math.round(suggestion.confidence * 100)}%
+        </span>
+      </div>
+
+      <dl className="mt-4 grid grid-cols-2 gap-3 text-[12px]">
+        <InfoTile label="Projekt" value={project?.title ?? suggestion.suggestedNewProjectTitle ?? "Unklar"} />
+        <InfoTile label="Deadline" value={formatDateLabel(suggestion.dueDate)} />
+        <InfoTile label="Priorität" value={priorityLabels[suggestion.priority]} />
+        <InfoTile label="Quelle" value="Rohnotiz" />
+      </dl>
+
+      {!compact ? (
+        <p className="mt-4 text-[12px] leading-5 text-[var(--muted)]">
+          {suggestion.reasoning}
+        </p>
+      ) : null}
+
+      <div className="mt-4 grid grid-cols-2 gap-2">
+        <button
+          type="button"
+          onClick={onAccept}
+          className="rounded-[5px] bg-[var(--red)] px-3 py-3 text-[12px] font-bold text-white"
+        >
+          Übernehmen
+        </button>
+        <button
+          type="button"
+          onClick={onEdit}
+          className="rounded-[5px] border border-[var(--line-strong)] px-3 py-3 text-[12px] font-bold"
+        >
+          Bearbeiten
+        </button>
+        <button
+          type="button"
+          onClick={onEdit}
+          className="rounded-[5px] border border-[var(--line-strong)] px-3 py-3 text-[12px] font-bold"
+        >
+          Anderem Projekt zuordnen
+        </button>
+        <button
+          type="button"
+          onClick={onCreateTask}
+          className="rounded-[5px] border border-[var(--line-strong)] px-3 py-3 text-[12px] font-bold"
+        >
+          Neue Aufgabe erstellen
+        </button>
+      </div>
+      <button
+        type="button"
+        onClick={onReject}
+        className="mt-3 text-[12px] font-bold text-[var(--muted)] underline underline-offset-2"
+      >
+        Ignorieren
+      </button>
+    </article>
+  );
+}
+
+function SuggestionEditor({
+  suggestion,
+  projects,
+  onCancel,
+  onSave,
+}: {
+  suggestion: AiSuggestion;
+  projects: Project[];
+  onCancel: () => void;
+  onSave: (suggestion: AiSuggestion) => void;
+}) {
+  const [draft, setDraft] = useState(suggestion);
+
+  return (
+    <article className="rounded-[7px] border border-[var(--line)] bg-white/70 p-4 shadow-sm">
+      <div className="space-y-3">
+        <Field label="Aufgabe">
+          <input
+            value={draft.suggestedTitle}
+            onChange={(event) =>
+              setDraft((current) => ({ ...current, suggestedTitle: event.target.value }))
+            }
+            className="h-11 w-full rounded-[5px] border border-[var(--line)] bg-white px-3 text-[13px] outline-none"
+          />
+        </Field>
+        <Field label="Projekt">
+          <select
+            value={draft.suggestedProjectId ?? "__new"}
+            onChange={(event) =>
+              setDraft((current) => ({
+                ...current,
+                suggestedProjectId: event.target.value === "__new" ? null : event.target.value,
+                suggestedNewProjectTitle:
+                  event.target.value === "__new" ? current.suggestedNewProjectTitle ?? "Neues Projekt" : null,
+              }))
+            }
+            className="h-11 w-full rounded-[5px] border border-[var(--line)] bg-white px-3 text-[13px] outline-none"
+          >
+            {projects.map((project) => (
+              <option key={project.id} value={project.id}>
+                {project.title}
+              </option>
+            ))}
+            <option value="__new">Neues Projekt vorschlagen</option>
+          </select>
+        </Field>
+        {!draft.suggestedProjectId ? (
+          <Field label="Neues Projekt">
+            <input
+              value={draft.suggestedNewProjectTitle ?? ""}
+              onChange={(event) =>
+                setDraft((current) => ({
+                  ...current,
+                  suggestedNewProjectTitle: event.target.value,
+                }))
+              }
+              className="h-11 w-full rounded-[5px] border border-[var(--line)] bg-white px-3 text-[13px] outline-none"
+            />
+          </Field>
+        ) : null}
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Deadline">
+            <input
+              type="date"
+              value={draft.dueDate ?? ""}
+              onChange={(event) =>
+                setDraft((current) => ({
+                  ...current,
+                  dueDate: event.target.value || null,
+                }))
+              }
+              className="h-11 w-full rounded-[5px] border border-[var(--line)] bg-white px-3 text-[13px] outline-none"
+            />
+          </Field>
+          <Field label="Priorität">
+            <select
+              value={draft.priority}
+              onChange={(event) =>
+                setDraft((current) => ({
+                  ...current,
+                  priority: event.target.value as TaskPriority,
+                }))
+              }
+              className="h-11 w-full rounded-[5px] border border-[var(--line)] bg-white px-3 text-[13px] outline-none"
+            >
+              <option value="low">Niedrig</option>
+              <option value="medium">Mittel</option>
+              <option value="high">Hoch</option>
+            </select>
+          </Field>
+        </div>
+      </div>
+      <div className="mt-4 flex gap-2">
+        <button
+          type="button"
+          onClick={() => onSave(draft)}
+          className="flex-1 rounded-[5px] bg-[var(--red)] px-3 py-3 text-[12px] font-bold text-white"
+        >
+          Speichern
+        </button>
+        <button
+          type="button"
+          onClick={onCancel}
+          className="flex-1 rounded-[5px] border border-[var(--line-strong)] px-3 py-3 text-[12px] font-bold"
+        >
+          Abbrechen
+        </button>
+      </div>
+    </article>
+  );
+}
+
+function TaskEditor({
+  task,
+  projects,
+  onClose,
+  onDelete,
+  onSave,
+}: {
+  task: Task;
+  projects: Project[];
+  onClose: () => void;
+  onDelete: (taskId: string) => void;
+  onSave: (task: Task) => void;
+}) {
+  const [draft, setDraft] = useState(task);
+
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-end bg-black/35 p-0 md:place-items-center md:p-6">
+      <div className="w-full max-w-[430px] rounded-t-[18px] bg-[var(--paper-soft)] p-6 shadow-2xl md:rounded-[18px]">
+        <div className="flex items-center justify-between">
+          <h2 className="font-display text-[22px] font-bold">Aufgabe bearbeiten</h2>
+          <button type="button" onClick={onClose} className="grid h-9 w-9 place-items-center">
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+        <div className="mt-5 space-y-3">
+          <Field label="Titel">
+            <input
+              value={draft.title}
+              onChange={(event) => setDraft((current) => ({ ...current, title: event.target.value }))}
+              className="h-11 w-full rounded-[5px] border border-[var(--line)] bg-white px-3 text-[13px] outline-none"
+            />
+          </Field>
+          <Field label="Beschreibung">
+            <textarea
+              value={draft.description}
+              onChange={(event) =>
+                setDraft((current) => ({ ...current, description: event.target.value }))
+              }
+              className="min-h-24 w-full resize-none rounded-[5px] border border-[var(--line)] bg-white px-3 py-3 text-[13px] outline-none"
+            />
+          </Field>
+          <Field label="Projekt">
+            <select
+              value={draft.projectId}
+              onChange={(event) =>
+                setDraft((current) => ({ ...current, projectId: event.target.value }))
+              }
+              className="h-11 w-full rounded-[5px] border border-[var(--line)] bg-white px-3 text-[13px] outline-none"
+            >
+              {projects.map((project) => (
+                <option key={project.id} value={project.id}>
+                  {project.title}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <div className="grid grid-cols-3 gap-3">
+            <Field label="Status">
+              <select
+                value={draft.status}
+                onChange={(event) =>
+                  setDraft((current) => ({
+                    ...current,
+                    status: event.target.value as TaskStatus,
+                  }))
+                }
+                className="h-11 w-full rounded-[5px] border border-[var(--line)] bg-white px-2 text-[12px] outline-none"
+              >
+                <option value="open">Offen</option>
+                <option value="in_progress">In Arbeit</option>
+                <option value="done">Erledigt</option>
+              </select>
+            </Field>
+            <Field label="Priorität">
+              <select
+                value={draft.priority}
+                onChange={(event) =>
+                  setDraft((current) => ({
+                    ...current,
+                    priority: event.target.value as TaskPriority,
+                  }))
+                }
+                className="h-11 w-full rounded-[5px] border border-[var(--line)] bg-white px-2 text-[12px] outline-none"
+              >
+                <option value="low">Niedrig</option>
+                <option value="medium">Mittel</option>
+                <option value="high">Hoch</option>
+              </select>
+            </Field>
+            <Field label="Deadline">
+              <input
+                type="date"
+                value={draft.dueDate ?? ""}
+                onChange={(event) =>
+                  setDraft((current) => ({ ...current, dueDate: event.target.value || null }))
+                }
+                className="h-11 w-full rounded-[5px] border border-[var(--line)] bg-white px-2 text-[12px] outline-none"
+              />
+            </Field>
+          </div>
+        </div>
+        <div className="mt-5 flex gap-2">
+          <button
+            type="button"
+            onClick={() => onSave({ ...draft, updatedAt: new Date().toISOString() })}
+            disabled={!draft.title.trim()}
+            className="flex-1 rounded-[5px] bg-[var(--red)] px-3 py-3 text-[13px] font-bold text-white disabled:opacity-50"
+          >
+            Speichern
+          </button>
+          <button
+            type="button"
+            onClick={() => onDelete(draft.id)}
+            className="rounded-[5px] border border-[var(--line-strong)] px-3 py-3 text-[13px] font-bold text-[var(--red)]"
+          >
+            Löschen
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function BottomNav({
+  screen,
+  pendingCount,
+  onNavigate,
+}: {
+  screen: Screen;
+  pendingCount: number;
+  onNavigate: (screen: Screen) => void;
+}) {
+  const items = [
+    { screen: "today" as Screen, label: "Heute", icon: Home },
+    { screen: "projects" as Screen, label: "Projekte", icon: ClipboardList },
+    { screen: "inbox" as Screen, label: "Inbox", icon: Inbox, count: pendingCount },
+    { screen: "more" as Screen, label: "Mehr", icon: MoreHorizontal },
+  ];
+
+  return (
+    <nav className="absolute inset-x-0 bottom-0 z-30 h-[92px] bg-[var(--green)] px-5 pt-4 text-white shadow-[0_-18px_40px_rgb(0_0_0_/_14%)]">
+      <div className="grid grid-cols-[1fr_1fr_76px_1fr_1fr] items-start text-[10px] font-semibold">
+        {items.slice(0, 2).map((item) => (
+          <NavButton key={item.screen} item={item} active={screen === item.screen} onNavigate={onNavigate} />
+        ))}
+        <button
+          type="button"
+          onClick={() => onNavigate("capture")}
+          className="mx-auto -mt-3 grid h-[62px] w-[62px] place-items-center rounded-full bg-[var(--red)] text-white shadow-lg shadow-black/25"
+          aria-label="Schnellnotiz erfassen"
+        >
+          <Plus className="h-9 w-9" />
+        </button>
+        {items.slice(2).map((item) => (
+          <NavButton key={item.screen} item={item} active={screen === item.screen} onNavigate={onNavigate} />
+        ))}
+      </div>
+    </nav>
+  );
+}
+
+function NavButton({
+  item,
+  active,
+  onNavigate,
+}: {
+  item: { screen: Screen; label: string; icon: React.ElementType; count?: number };
+  active: boolean;
+  onNavigate: (screen: Screen) => void;
+}) {
+  const Icon = item.icon;
+
+  return (
+    <button
+      type="button"
+      onClick={() => onNavigate(item.screen)}
+      className={cx("relative flex flex-col items-center gap-1", active ? "text-[var(--red)]" : "text-white")}
+    >
+      <Icon className={cx("h-5 w-5", active && "fill-[var(--red)]")} />
+      <span>{item.label}</span>
+      {item.count ? (
+        <span className="absolute right-3 top-[-5px] grid h-4 min-w-4 place-items-center rounded-full bg-[var(--red)] px-1 text-[9px] text-white">
+          {item.count}
+        </span>
+      ) : null}
+    </button>
+  );
+}
+
+function DesktopSidebar({
+  screen,
+  pendingCount,
+  onNavigate,
+}: {
+  screen: Screen;
+  pendingCount: number;
+  onNavigate: (screen: Screen) => void;
+}) {
+  const items = [
+    { screen: "today" as Screen, label: "Heute", icon: Home },
+    { screen: "projects" as Screen, label: "Projekte", icon: ClipboardList },
+    { screen: "inbox" as Screen, label: `Inbox${pendingCount ? ` (${pendingCount})` : ""}`, icon: Inbox },
+    { screen: "more" as Screen, label: "Mehr", icon: MoreHorizontal },
+  ];
+
+  return (
+    <aside className="sticky top-6 hidden rounded-[12px] border border-[var(--line)] bg-white/35 p-4 md:block">
+      <div className="px-2">
+        <p className="font-display text-[24px] font-bold">Rote Agenda</p>
+        <p className="mt-2 text-[12px] leading-5 text-[var(--muted)]">
+          Der rote Faden für Capture, Aufgaben und Projekte.
+        </p>
+      </div>
+      <div className="mt-6 space-y-1">
+        {items.map((item) => {
+          const Icon = item.icon;
+          const active =
+            screen === item.screen ||
+            (screen === "project" && item.screen === "projects") ||
+            (screen === "task" && item.screen === "today");
+          return (
+            <button
+              type="button"
+              key={item.screen}
+              onClick={() => onNavigate(item.screen)}
+              className={cx(
+                "flex w-full items-center gap-3 rounded-[6px] px-3 py-3 text-left text-[13px] font-bold",
+                active ? "bg-[var(--green)] text-white" : "hover:bg-white/55",
+              )}
+            >
+              <Icon className="h-4 w-4" />
+              {item.label}
+            </button>
+          );
+        })}
+      </div>
+      <button
+        type="button"
+        onClick={() => onNavigate("capture")}
+        className="mt-6 flex w-full items-center justify-center gap-2 rounded-[6px] bg-[var(--red)] px-4 py-3 text-[13px] font-bold text-white"
+      >
+        <Plus className="h-4 w-4" />
+        Schnell erfassen
+      </button>
+    </aside>
+  );
+}
+
+function DesktopInsightPanel({
+  data,
+  selectedProject,
+  onCapture,
+  onOpenInbox,
+}: {
+  data: AppData;
+  selectedProject?: Project;
+  onCapture: () => void;
+  onOpenInbox: () => void;
+}) {
+  const openTasks = data.tasks.filter((task) => task.status !== "done");
+  const pending = data.suggestions.filter((suggestion) => suggestion.state === "pending");
+  const projectTasks = selectedProject
+    ? data.tasks.filter((task) => task.projectId === selectedProject.id)
+    : [];
+
+  return (
+    <aside className="sticky top-6 hidden space-y-4 md:block">
+      <section className="rounded-[12px] border border-[var(--line)] bg-white/35 p-5">
+        <p className="text-[11px] font-extrabold uppercase tracking-[0.05em] text-[var(--red)]">
+          Fokus
+        </p>
+        <h2 className="mt-3 font-display text-[26px] font-bold">
+          {openTasks.length} offene Aufgaben
+        </h2>
+        <p className="mt-2 text-[13px] leading-6 text-[var(--muted)]">
+          Capture bleibt schnell, die Ordnung passiert danach in Vorschlägen und Projekten.
+        </p>
+        <button
+          type="button"
+          onClick={onCapture}
+          className="mt-5 flex w-full items-center justify-center gap-2 rounded-[6px] bg-[var(--green)] px-4 py-3 text-[13px] font-bold text-white"
+        >
+          <Plus className="h-4 w-4" />
+          Neue Rohnotiz
+        </button>
+      </section>
+
+      {selectedProject ? (
+        <section className="rounded-[12px] border border-[var(--line)] bg-white/35 p-5">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <p className="text-[11px] font-extrabold uppercase tracking-[0.05em] text-[var(--red)]">
+                Aktives Projekt
+              </p>
+              <h2 className="mt-3 font-display text-[23px] font-bold">
+                {selectedProject.title}
+              </h2>
+            </div>
+            <Tags className="h-5 w-5 text-[var(--muted)]" />
+          </div>
+          <ProgressBar value={projectProgress(selectedProject, projectTasks)} className="mt-5" />
+          <p className="mt-3 text-[12px] text-[var(--muted)]">
+            {projectTasks.filter((task) => task.status !== "done").length} offene Aufgaben
+          </p>
+        </section>
+      ) : null}
+
+      <button
+        type="button"
+        onClick={onOpenInbox}
+        className="flex w-full items-center justify-between rounded-[12px] border border-[var(--line)] bg-white/35 p-5 text-left"
+      >
+        <span>
+          <span className="block text-[11px] font-extrabold uppercase tracking-[0.05em] text-[var(--red)]">
+            KI-Prüfung
+          </span>
+          <span className="mt-2 block font-display text-[22px] font-bold">
+            {pending.length} Vorschläge offen
+          </span>
+        </span>
+        <ChevronRight className="h-5 w-5" />
+      </button>
+    </aside>
+  );
+}
+
+function ProgressBar({ value, className }: { value: number; className?: string }) {
+  return (
+    <div className={cx("h-1.5 overflow-hidden rounded-full bg-black/12", className)}>
+      <div
+        className="h-full rounded-full bg-[var(--red)] transition-all"
+        style={{ width: `${Math.max(0, Math.min(100, value))}%` }}
+      />
+    </div>
+  );
+}
+
+function InfoTile({ label, value }: { label: string; value: string | number }) {
+  return (
+    <div className="rounded-[6px] border border-[var(--line)] bg-white/45 p-3">
+      <dt className="text-[10px] font-bold uppercase tracking-[0.05em] text-[var(--muted)]">
+        {label}
+      </dt>
+      <dd className="mt-1 text-[12px] font-bold text-[var(--ink)]">{value}</dd>
+    </div>
+  );
+}
+
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <label className="block">
+      <span className="mb-1.5 block text-[11px] font-bold uppercase tracking-[0.04em] text-[var(--muted)]">
+        {label}
+      </span>
+      {children}
+    </label>
+  );
+}
+
+function EmptyState({ title, text }: { title: string; text: string }) {
+  return (
+    <div className="mt-6 rounded-[7px] border border-dashed border-[var(--line-strong)] p-5">
+      <p className="font-display text-[18px] font-bold">{title}</p>
+      <p className="mt-2 text-[13px] leading-6 text-[var(--muted)]">{text}</p>
+    </div>
+  );
+}
+
+function suggestionStatus(suggestion: AiSuggestion) {
+  if (suggestion.suggestedNewProjectTitle) return "Neues Projekt vorgeschlagen";
+  if (suggestion.needsReview) return "Rückfrage nötig";
+  if (suggestion.confidence < 0.75) return "Unsicher";
+  return "Sicher zugeordnet";
+}
+
+function projectProgress(project: Project, tasks: Task[]) {
+  if (!tasks.length) return project.progress;
+  const done = tasks.filter((task) => task.status === "done").length;
+  return Math.round((done / tasks.length) * 100);
+}
