@@ -67,7 +67,3 @@ button:disabled {
 .hide-scrollbar::-webkit-scrollbar {
   display: none;
 }
-
-.phone-shadow {
-  box-shadow: var(--shadow);
-}

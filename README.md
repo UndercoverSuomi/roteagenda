@@ -1,6 +1,8 @@
 # Rote Agenda
 
-Rote Agenda ist ein mobile-first MVP für Capture-first Aufgaben- und Projektorganisation. Rohnotizen werden lokal von einer Mock-KI in strukturierte Aufgaben, Projektzuordnungen, Deadlines, Prioritäten und prüfbare Vorschläge übersetzt.
+Rote Agenda ist ein webbasiertes, mobile-first MVP für Capture-first Aufgaben- und Projektorganisation. Rohnotizen werden lokal von einer Mock-KI in strukturierte Aufgaben, Projektzuordnungen, Deadlines, Prioritäten und prüfbare Vorschläge übersetzt.
+
+Die Oberfläche ist zuerst als responsives Webtool gedacht: schnell am Handy erfassen, bequem am Desktop prüfen und organisieren. Die mobile Informationsarchitektur bleibt bewusst App-tauglich, damit später eine Android-Version darauf aufbauen kann.
 
 ## Kernflow
 

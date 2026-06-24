@@ -413,10 +413,10 @@ export function RoteAgendaApp() {
     <main className="min-h-screen bg-[var(--paper)] text-[var(--ink)] md:p-6">
       <div
         className={cx(
-          "mx-auto grid min-h-screen w-full max-w-7xl items-start gap-6 md:min-h-0",
+          "mx-auto grid min-h-screen w-full max-w-[1500px] items-start gap-6 md:min-h-0",
           screen === "welcome"
-            ? "md:grid-cols-[minmax(360px,430px)] md:justify-center"
-            : "md:grid-cols-[248px_minmax(360px,430px)_minmax(280px,1fr)]",
+            ? "md:grid-cols-1"
+            : "md:grid-cols-[248px_minmax(0,1fr)_320px]",
         )}
       >
         {screen !== "welcome" ? (
@@ -427,7 +427,7 @@ export function RoteAgendaApp() {
           />
         ) : null}
 
-        <PhoneShell hasBottomNav={screen !== "welcome"}>
+        <WorkSurface hasBottomNav={screen !== "welcome"}>
           {screenContent}
           {screen !== "welcome" ? (
             <BottomNav
@@ -436,7 +436,7 @@ export function RoteAgendaApp() {
               onNavigate={navigate}
             />
           ) : null}
-        </PhoneShell>
+        </WorkSurface>
 
         {screen !== "welcome" ? (
           <DesktopInsightPanel
@@ -461,7 +461,7 @@ export function RoteAgendaApp() {
   );
 }
 
-function PhoneShell({
+function WorkSurface({
   children,
   hasBottomNav,
 }: {
@@ -469,60 +469,53 @@ function PhoneShell({
   hasBottomNav: boolean;
 }) {
   return (
-    <section className="phone-shadow relative mx-auto flex min-h-[100dvh] w-full max-w-[430px] flex-col overflow-hidden bg-[var(--paper-soft)] md:min-h-[860px] md:rounded-[18px]">
-      <StatusBar />
-      <div className={cx("flex min-h-0 flex-1 flex-col", hasBottomNav && "pb-[92px]")}>
+    <section className="relative mx-auto flex min-h-[100dvh] w-full max-w-[430px] flex-col overflow-hidden bg-[var(--paper-soft)] shadow-[0_18px_48px_rgb(31_24_14_/_10%)] md:min-h-[calc(100vh-48px)] md:max-w-none md:rounded-[14px] md:border md:border-[var(--line)] md:shadow-none">
+      <div
+        className={cx(
+          "flex min-h-0 flex-1 flex-col pt-4 md:pt-0",
+          hasBottomNav && "pb-[92px] md:pb-0",
+        )}
+      >
         {children}
       </div>
     </section>
   );
 }
 
-function StatusBar() {
-  return (
-    <div className="z-20 flex h-12 shrink-0 items-center justify-between px-8 text-[14px] font-extrabold tracking-[-0.01em] text-black">
-      <span>9:41</span>
-      <div className="flex items-center gap-1.5">
-        <span className="h-3 w-4 rounded-sm border border-black">
-          <span className="block h-full w-3 rounded-[1px] bg-black" />
-        </span>
-        <span className="h-3 w-4 rounded-sm border border-black">
-          <span className="block h-full w-2.5 rounded-[1px] bg-black" />
-        </span>
-        <span className="h-3 w-6 rounded-[3px] border border-black p-[1px]">
-          <span className="block h-full w-4 rounded-[1px] bg-black" />
-        </span>
-      </div>
-    </div>
-  );
-}
-
 function WelcomeScreen({ onStart }: { onStart: () => void }) {
   return (
-    <div className="relative flex flex-1 overflow-hidden">
+    <div className="relative flex flex-1 overflow-hidden md:min-h-[calc(100vh-48px)]">
       <Image
         src="/welcome-movement.png"
         alt="Bewegungssilhouette mit roter Flagge"
         fill
         priority
-        sizes="(max-width: 768px) 100vw, 430px"
-        className="object-cover"
+        sizes="(max-width: 768px) 100vw, 62vw"
+        className="object-cover object-left-bottom md:w-[58%] md:max-w-[720px]"
       />
-      <div className="relative z-10 flex flex-1 flex-col px-8 pb-8 pt-[22vh]">
-        <div className="ml-[35%] max-w-[230px]">
-          <h1 className="font-display text-[42px] font-bold leading-[1.05] tracking-[-0.02em] text-[var(--green)]">
+      <div className="relative z-10 flex flex-1 flex-col px-8 pb-8 pt-[18vh] md:ml-[48%] md:max-w-[620px] md:px-12 md:pb-12 md:pt-24 lg:pt-32">
+        <div className="ml-[35%] max-w-[230px] md:ml-0 md:max-w-none">
+          <p className="hidden text-[12px] font-extrabold uppercase tracking-[0.08em] text-[var(--red)] md:block">
+            Webbasiertes Capture-Tool
+          </p>
+          <h1 className="font-display text-[42px] font-bold leading-[1.05] tracking-[-0.02em] text-[var(--green)] md:mt-4 md:text-[64px] lg:text-[72px]">
             Rote Agenda
           </h1>
-          <p className="mt-6 font-display text-[17px] font-bold leading-7 text-[var(--ink)]">
+          <p className="mt-6 font-display text-[17px] font-bold leading-7 text-[var(--ink)] md:max-w-[430px] md:text-[23px] md:leading-9">
             Der rote Faden für deine Projekte.
           </p>
           <div className="mt-8 h-0.5 w-10 bg-[var(--red)]" />
-          <p className="mt-6 max-w-[210px] font-display text-[14px] italic leading-6 text-[var(--ink-soft)]">
+          <p className="mt-6 max-w-[210px] font-display text-[14px] italic leading-6 text-[var(--ink-soft)] md:max-w-[470px] md:text-[16px] md:leading-8">
             Organisiere Gedanken. Strukturiere Projekte. Verändere die Welt.
+          </p>
+          <p className="mt-5 hidden max-w-[500px] text-[14px] leading-7 text-[var(--muted)] md:block">
+            Zuerst als schnelles Webtool gedacht: am Handy sofort erfassen,
+            am Desktop Aufgaben, Projekte und KI-Vorschläge bequem prüfen.
+            Die Oberfläche bleibt später gut als Android-App adaptierbar.
           </p>
         </div>
 
-        <div className="mt-auto space-y-8">
+        <div className="mt-auto space-y-8 md:max-w-sm">
           <button
             type="button"
             onClick={onStart}
@@ -564,7 +557,7 @@ function TodayScreen({
   onCapture: () => void;
 }) {
   return (
-    <div className="flex flex-1 flex-col px-6 pt-3">
+    <div className="flex flex-1 flex-col px-6 pt-3 md:px-8 md:pt-8 lg:px-10">
       <ScreenHeader title="Heute" leftIcon={<Menu className="h-6 w-6" />} rightIcon={<Bell className="h-5 w-5" />} />
 
       <button
@@ -651,7 +644,7 @@ function CaptureScreen({
   onUpdateSuggestion: (suggestion: AiSuggestion) => void;
 }) {
   return (
-    <div className="flex flex-1 flex-col px-6 pt-3">
+    <div className="flex flex-1 flex-col px-6 pt-3 md:px-8 md:pt-8 lg:px-10">
       <ScreenHeader
         title="Schnellnotiz"
         leftIcon={<ArrowLeft className="h-5 w-5" />}
@@ -725,7 +718,7 @@ function InboxScreen({
   onReject: (suggestionId: string) => void;
 }) {
   return (
-    <div className="flex flex-1 flex-col px-6 pt-3">
+    <div className="flex flex-1 flex-col px-6 pt-3 md:px-8 md:pt-8 lg:px-10">
       <ScreenHeader title="Inbox" leftIcon={<Inbox className="h-5 w-5" />} rightIcon={<MoreHorizontal className="h-5 w-5" />} />
       <p className="mt-5 text-[13px] leading-6 text-[var(--muted)]">
         Ungeprüfte KI-Vorschläge bleiben hier, bis du sie annimmst, änderst oder ablehnst.
@@ -769,9 +762,9 @@ function ProjectsScreen({
   onOpenProject: (projectId: string) => void;
 }) {
   return (
-    <div className="flex flex-1 flex-col px-6 pt-3">
+    <div className="flex flex-1 flex-col px-6 pt-3 md:px-8 md:pt-8 lg:px-10">
       <ScreenHeader title="Projekte" leftIcon={<FolderKanban className="h-5 w-5" />} rightIcon={<MoreHorizontal className="h-5 w-5" />} />
-      <div className="mt-6 space-y-4">
+      <div className="mt-6 grid gap-4 lg:grid-cols-2">
         {projects.map((project) => {
           const projectTasks = tasks.filter((task) => task.projectId === project.id);
           const openTasks = projectTasks.filter((task) => task.status !== "done").length;
@@ -836,8 +829,8 @@ function ProjectDetailScreen({
   const progress = projectProgress(project, tasks);
 
   return (
-    <div className="flex flex-1 flex-col pt-3">
-      <div className="px-6">
+    <div className="flex flex-1 flex-col pt-3 md:pt-8">
+      <div className="px-6 md:px-8 lg:px-10">
         <ScreenHeader
           title=""
           leftIcon={<ArrowLeft className="h-5 w-5" />}
@@ -864,7 +857,7 @@ function ProjectDetailScreen({
         labels={{ tasks: "Aufgaben", details: "Details", notes: "Notizen" }}
       />
 
-      <div className="px-6">
+      <div className="px-6 md:px-8 lg:px-10">
         {tab === "tasks" ? (
           <div className="divide-y divide-[var(--line)]">
             {tasks.map((task) => (
@@ -965,8 +958,8 @@ function TaskDetailScreen({
   onOpenProject: () => void;
 }) {
   return (
-    <div className="flex flex-1 flex-col pt-3">
-      <div className="px-6">
+    <div className="flex flex-1 flex-col pt-3 md:pt-8">
+      <div className="px-6 md:px-8 lg:px-10">
         <ScreenHeader
           title=""
           leftIcon={<ArrowLeft className="h-5 w-5" />}
@@ -1004,7 +997,7 @@ function TaskDetailScreen({
         labels={{ details: "Details", notes: "Rohnotiz", tasks: "KI" }}
       />
 
-      <div className="space-y-5 px-6">
+      <div className="space-y-5 px-6 md:px-8 lg:px-10">
         <label className="flex items-center gap-3 rounded-[6px] border border-[var(--line)] bg-white/45 p-4 text-[14px] font-bold">
           <button
             type="button"
@@ -1046,10 +1039,10 @@ function TaskDetailScreen({
 
 function MoreScreen({ onReset }: { onReset: () => void }) {
   return (
-    <div className="flex flex-1 flex-col px-6 pt-3">
+    <div className="flex flex-1 flex-col px-6 pt-3 md:px-8 md:pt-8 lg:px-10">
       <ScreenHeader title="Mehr" leftIcon={<MoreHorizontal className="h-5 w-5" />} />
       <div className="mt-8 space-y-3">
-        <InfoTile label="App" value="Rote Agenda MVP" />
+        <InfoTile label="Produkt" value="Rote Agenda Webtool" />
         <InfoTile label="Speicherung" value="Lokal im Browser" />
         <button
           type="button"
@@ -1602,7 +1595,7 @@ function BottomNav({
   ];
 
   return (
-    <nav className="absolute inset-x-0 bottom-0 z-30 h-[92px] bg-[var(--green)] px-5 pt-4 text-white shadow-[0_-18px_40px_rgb(0_0_0_/_14%)]">
+    <nav className="absolute inset-x-0 bottom-0 z-30 h-[92px] bg-[var(--green)] px-5 pt-4 text-white shadow-[0_-18px_40px_rgb(0_0_0_/_14%)] md:hidden">
       <div className="grid grid-cols-[1fr_1fr_76px_1fr_1fr] items-start text-[10px] font-semibold">
         {items.slice(0, 2).map((item) => (
           <NavButton key={item.screen} item={item} active={screen === item.screen} onNavigate={onNavigate} />
