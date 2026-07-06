@@ -232,6 +232,30 @@ const messages = {
   "sugg.newProjectLabel": { de: "Neues Projekt", en: "New project" },
   "sugg.proposeNew": { de: "Neues Projekt vorschlagen", en: "Suggest a new project" },
 
+  // Google-Integration
+  "google.addToCalendar": {
+    de: "In Google Kalender übernehmen",
+    en: "Add to Google Calendar",
+  },
+  "google.addToTasks": { de: "Als Google Task speichern", en: "Save as Google Task" },
+  "google.working": { de: "Wird übertragen...", en: "Sending..." },
+  "google.doneCalendar": {
+    de: "Im Google Kalender angelegt.",
+    en: "Added to Google Calendar.",
+  },
+  "google.doneTasks": {
+    de: "In Google Tasks gespeichert.",
+    en: "Saved to Google Tasks.",
+  },
+  "google.error": {
+    de: "Google-Übertragung fehlgeschlagen: {detail}",
+    en: "Google transfer failed: {detail}",
+  },
+  "google.tasksNotConfigured": {
+    de: "Für Google Tasks fehlt noch die Einrichtung (NEXT_PUBLIC_GOOGLE_CLIENT_ID, siehe README).",
+    en: "Google Tasks still needs setup (NEXT_PUBLIC_GOOGLE_CLIENT_ID, see README).",
+  },
+
   // Task editor
   "taskEditor.title": { de: "Aufgabe bearbeiten", en: "Edit task" },
   "editor.titleLabel": { de: "Titel", en: "Title" },
@@ -252,6 +276,7 @@ const messages = {
     de: "z. B. kunde, angebot, newsletter",
     en: "e.g. client, proposal, newsletter",
   },
+  "projectEditor.color": { de: "Farbe", en: "Color" },
   "projectEditor.aiLabel": {
     de: "KI darf Notizen diesem Projekt zuordnen",
     en: "AI may assign notes to this project",

@@ -16,6 +16,7 @@ export interface Project {
   title: string;
   description: string;
   keywords: string[];
+  color: string;
   progress: number;
   aiEnabled: boolean;
   createdAt: string;

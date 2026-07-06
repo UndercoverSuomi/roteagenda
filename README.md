@@ -18,6 +18,19 @@ Die Oberflaeche ist zuerst als responsives Webtool gedacht: schnell am Handy erf
 - Sprache: Deutsch/Englisch (folgt initial der Browsersprache, umstellbar unter "Mehr")
 - Design: System/Hell/Dunkel
 - KI-Modell pro Account waehlbar
+- Projektfarben: jede Aufgabe traegt die Farbe ihres Projekts, Prioritaet als farbiger Punkt
+
+## Google-Integration (optional)
+
+In der Aufgabenansicht lassen sich Aufgaben per Klick an Google uebergeben: mit Termin als Google-Kalender-Eintrag, ohne Termin als Google Task.
+
+- Ohne Einrichtung funktioniert der Kalender-Button sofort (oeffnet Google Kalender mit vorbefuelltem Termin zum Bestaetigen).
+- Fuer Google Tasks und das direkte Anlegen im Kalender wird eine OAuth-Client-ID benoetigt:
+  1. In der [Google Cloud Console](https://console.cloud.google.com/apis/credentials) ein Projekt anlegen.
+  2. Unter "APIs & Services" die **Google Tasks API** und **Google Calendar API** aktivieren.
+  3. OAuth-Zustimmungsbildschirm konfigurieren (External, eigener Account als Testnutzer reicht).
+  4. Anmeldedaten → "OAuth-Client-ID erstellen" → Typ "Webanwendung" → als Authorized JavaScript origins `http://localhost:3000` und `https://roteagenda.appwrite.network` eintragen.
+  5. Die Client-ID als `NEXT_PUBLIC_GOOGLE_CLIENT_ID` in `.env.local` und in den Appwrite-Site-Variablen setzen.
 
 ## Tech Stack
 

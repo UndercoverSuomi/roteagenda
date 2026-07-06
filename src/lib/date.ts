@@ -1,4 +1,5 @@
-import { translate, type Locale } from "@/lib/i18n";
+// Relativer Import mit Endung, damit die Node-Tests die Datei laden können.
+import { translate, type Locale } from "./i18n.ts";
 
 const WEEKDAYS: Record<Locale, string[]> = {
   de: ["So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"],

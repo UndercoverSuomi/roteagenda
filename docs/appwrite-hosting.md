@@ -31,7 +31,7 @@ Die App setzt beim Speichern pro Dokument `read`, `update` und `delete` fuer den
 
 Nur relevant, falls Collections manuell angelegt werden. Textfelder, die leer sein koennen, sind optional; die App validiert Pflichtfelder clientseitig.
 
-**projects:** `id` (string, required), `title` (string, required), `description` (string), `keywords` (string array), `progress` (integer, required), `aiEnabled` (boolean, required), `createdAt`/`updatedAt` (string, required)
+**projects:** `id` (string, required), `title` (string, required), `description` (string), `keywords` (string array), `color` (string), `progress` (integer, required), `aiEnabled` (boolean, required), `createdAt`/`updatedAt` (string, required)
 
 **tasks:** `id` (string, required), `title` (string, required), `description` (string), `projectId` (string, required), `status` (string, required), `priority` (string, required), `dueDate` (string), `sourceNoteId` (string), `createdBy` (string, required), `createdAt`/`updatedAt` (string, required)
 

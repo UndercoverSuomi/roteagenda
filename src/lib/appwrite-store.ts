@@ -6,6 +6,7 @@ import {
 } from "@/lib/appwrite-config";
 import { DEFAULT_AI_MODEL_ID, isAiModelId } from "@/lib/ai-models";
 import { isLocale, type Locale } from "@/lib/i18n";
+import { colorForId } from "@/lib/project-colors";
 import type {
   AiSuggestion,
   AppData,
@@ -180,6 +181,11 @@ function toAppwriteData<T extends StoredItem>(item: T) {
 
 function restoreNullableFields<T>(key: CollectionKey, item: T): T {
   const data = { ...(item as Record<string, unknown>) };
+
+  if (key === "projects") {
+    // Bestandsprojekte ohne gespeicherte Farbe bekommen eine stabile Standardfarbe.
+    data.color ??= colorForId(String(data.id ?? ""));
+  }
 
   if (key === "tasks") {
     data.dueDate ??= null;

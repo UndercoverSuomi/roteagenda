@@ -63,6 +63,21 @@ export default function DatenschutzPage() {
 
         <div>
           <h2 className="font-display text-[20px] font-bold text-[var(--ink)]">
+            Google-Integration (optional)
+          </h2>
+          <p className="mt-2">
+            Auf Wunsch kannst du einzelne Aufgaben per Klick an Google Kalender
+            oder Google Tasks übergeben. Dabei werden Titel, Beschreibung und
+            Termin der jeweiligen Aufgabe an Google (Google Ireland Ltd. bzw.
+            Google LLC, USA) übermittelt – nur auf deine aktive Anfrage hin und
+            nach Bestätigung im Google-Anmeldefenster. Nutzt du die
+            Spracheingabe, verarbeitet dein Browser die Aufnahme; bei Chrome
+            geschieht die Spracherkennung auf Google-Servern.
+          </p>
+        </div>
+
+        <div>
+          <h2 className="font-display text-[20px] font-bold text-[var(--ink)]">
             Deine Rechte
           </h2>
           <p className="mt-2">

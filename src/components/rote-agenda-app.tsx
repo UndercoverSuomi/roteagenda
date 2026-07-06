@@ -5,6 +5,7 @@ import Link from "next/link";
 import {
   ArrowLeft,
   Bell,
+  CalendarPlus,
   CheckSquare2,
   ChevronRight,
   Circle,
@@ -39,6 +40,13 @@ import {
 } from "@/lib/appwrite-store";
 import { formatDateLabel, isOverdue, toIsoDate } from "@/lib/date";
 import {
+  addEventToGoogleCalendar,
+  addTaskToGoogleTasks,
+  buildCalendarTemplateUrl,
+  isGoogleConfigured,
+  preloadGoogleIdentity,
+} from "@/lib/google";
+import {
   detectDeviceLocale,
   storeDeviceLocale,
   translate,
@@ -46,6 +54,12 @@ import {
   type MessageKey,
   type Translator,
 } from "@/lib/i18n";
+import {
+  PRIORITY_COLORS,
+  PROJECT_COLORS,
+  pickProjectColor,
+  withAlpha,
+} from "@/lib/project-colors";
 import {
   applyTheme,
   readStoredTheme,
@@ -115,6 +129,25 @@ function getSpeechRecognitionCtor(): (new () => SpeechRecognitionLike) | null {
   return candidates.SpeechRecognition ?? candidates.webkitSpeechRecognition ?? null;
 }
 
+const WELCOME_SEEN_KEY = "rote-agenda-welcome-done";
+
+function hasSeenWelcome() {
+  if (typeof window === "undefined") return false;
+  try {
+    return window.localStorage.getItem(WELCOME_SEEN_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function markWelcomeSeen() {
+  try {
+    window.localStorage.setItem(WELCOME_SEEN_KEY, "1");
+  } catch {
+    // Ohne localStorage erscheint der Startbildschirm eben erneut.
+  }
+}
+
 export function RoteAgendaApp() {
   const [data, setData] = useState<AppData>(() => createEmptyAppData());
   const [authUser, setAuthUser] = useState<Models.User<Models.Preferences> | null>(null);
@@ -127,7 +160,11 @@ export function RoteAgendaApp() {
   const [dataError, setDataError] = useState<string | null>(null);
   const [syncStatus, setSyncStatus] = useState<SyncStatus>("idle");
   const [syncFailure, setSyncFailure] = useState<SyncFailure | null>(null);
-  const [screen, setScreen] = useState<Screen>("welcome");
+  // Der Startbildschirm erscheint nur beim allerersten Besuch; die Entscheidung
+  // fällt clientseitig und wird nie serverseitig gerendert (Auth lädt zuerst).
+  const [screen, setScreen] = useState<Screen>(() =>
+    hasSeenWelcome() ? "today" : "welcome",
+  );
   const [taskFilter, setTaskFilter] = useState<TaskFilter>("all");
   const [projectTab, setProjectTab] = useState<ProjectDetailTab>("tasks");
   const [taskDetailTab, setTaskDetailTab] = useState<TaskDetailTab>("details");
@@ -352,6 +389,7 @@ export function RoteAgendaApp() {
           .split(/\s+/)
           .filter((word) => word.length > 4)
           .slice(0, 6),
+        color: pickProjectColor(data.projects.length),
         progress: 0,
         aiEnabled: true,
         createdAt: now,
@@ -525,6 +563,7 @@ export function RoteAgendaApp() {
       title: "",
       description: "",
       keywords: [],
+      color: pickProjectColor(data.projects.length),
       progress: 0,
       aiEnabled: true,
       createdAt: now,
@@ -611,7 +650,7 @@ export function RoteAgendaApp() {
     setActiveSuggestions([]);
     setSelectedProjectId("");
     setSelectedTaskId("");
-    setScreen("welcome");
+    setScreen(hasSeenWelcome() ? "today" : "welcome");
   }
 
   function handleDeleteAllData() {
@@ -693,7 +732,15 @@ export function RoteAgendaApp() {
 
   const screenContent = (() => {
     if (screen === "welcome") {
-      return <WelcomeScreen t={t} onStart={() => navigate("today")} />;
+      return (
+        <WelcomeScreen
+          t={t}
+          onStart={() => {
+            markWelcomeSeen();
+            navigate("today");
+          }}
+        />
+      );
     }
 
     if (screen === "capture") {
@@ -1320,7 +1367,7 @@ function TodayScreen({
 
       <TaskTabs value={filter} t={t} onChange={onFilterChange} />
 
-      <div className="mt-3 divide-y divide-[var(--line)]">
+      <div className="mt-4 space-y-2">
         {tasks.length ? (
           tasks.map((task) => (
             <TaskRow
@@ -1678,7 +1725,11 @@ function ProjectsScreen({
             >
               <div className="flex items-start justify-between gap-3">
                 <div>
-                  <h2 className="font-display text-[20px] font-bold leading-7">
+                  <h2 className="flex items-center gap-2 font-display text-[20px] font-bold leading-7">
+                    <span
+                      className="h-3 w-3 shrink-0 rounded-full"
+                      style={{ backgroundColor: project.color }}
+                    />
                     {project.title}
                   </h2>
                   <p className="mt-2 line-clamp-2 text-[12px] leading-5 text-[var(--muted)]">
@@ -1961,14 +2012,17 @@ function TaskDetailScreen({
 
       <div className="space-y-5 px-6 md:px-8 lg:px-10">
         {tab === "details" ? (
-          <section>
-            <h2 className="text-[12px] font-bold uppercase tracking-[0.04em] text-[var(--muted)]">
-              {t("task.descriptionHeading")}
-            </h2>
-            <p className="mt-2 text-[14px] leading-7 text-[var(--ink-soft)]">
-              {task.description || t("task.noDescription")}
-            </p>
-          </section>
+          <>
+            <section>
+              <h2 className="text-[12px] font-bold uppercase tracking-[0.04em] text-[var(--muted)]">
+                {t("task.descriptionHeading")}
+              </h2>
+              <p className="mt-2 text-[14px] leading-7 text-[var(--ink-soft)]">
+                {task.description || t("task.noDescription")}
+              </p>
+            </section>
+            <GoogleSection key={task.id} task={task} t={t} />
+          </>
         ) : null}
         {tab === "raw" ? (
           <section>
@@ -1992,6 +2046,98 @@ function TaskDetailScreen({
         ) : null}
       </div>
     </div>
+  );
+}
+
+function GoogleSection({ task, t }: { task: Task; t: Translator }) {
+  const [state, setState] = useState<"idle" | "working" | "done">("idle");
+  const [error, setError] = useState<string | null>(null);
+  const hasDate = Boolean(task.dueDate);
+
+  useEffect(() => {
+    void preloadGoogleIdentity().catch(() => undefined);
+  }, []);
+
+  async function handleTransfer() {
+    setError(null);
+
+    // Ohne Client-ID öffnet der Kalender-Weg die offizielle Vorbefüll-Seite.
+    if (hasDate && !isGoogleConfigured) {
+      window.open(
+        buildCalendarTemplateUrl({
+          title: task.title,
+          description: task.description,
+          dueDate: task.dueDate as string,
+        }),
+        "_blank",
+        "noopener",
+      );
+      return;
+    }
+
+    setState("working");
+    try {
+      if (hasDate) {
+        await addEventToGoogleCalendar({
+          title: task.title,
+          description: task.description,
+          dueDate: task.dueDate as string,
+        });
+      } else {
+        await addTaskToGoogleTasks({
+          title: task.title,
+          description: task.description,
+          dueDate: task.dueDate,
+        });
+      }
+      setState("done");
+    } catch (transferError) {
+      setState("idle");
+      setError(
+        t("google.error", {
+          detail:
+            transferError instanceof Error && transferError.message
+              ? transferError.message
+              : "?",
+        }),
+      );
+    }
+  }
+
+  return (
+    <section>
+      <h2 className="text-[12px] font-bold uppercase tracking-[0.04em] text-[var(--muted)]">
+        Google
+      </h2>
+      {!hasDate && !isGoogleConfigured ? (
+        <p className="mt-2 text-[13px] leading-6 text-[var(--muted)]">
+          {t("google.tasksNotConfigured")}
+        </p>
+      ) : state === "done" ? (
+        <p className="mt-2 rounded-[5px] border border-[var(--line)] bg-[var(--surface)] p-3 text-[13px] font-bold text-[var(--green-2)]">
+          {hasDate ? t("google.doneCalendar") : t("google.doneTasks")}
+        </p>
+      ) : (
+        <button
+          type="button"
+          onClick={() => void handleTransfer()}
+          disabled={state === "working"}
+          className="mt-2 flex items-center gap-2 rounded-[5px] border border-[var(--line-strong)] px-4 py-3 text-[13px] font-bold disabled:opacity-50"
+        >
+          <CalendarPlus className="h-4 w-4" />
+          {state === "working"
+            ? t("google.working")
+            : hasDate
+              ? t("google.addToCalendar")
+              : t("google.addToTasks")}
+        </button>
+      )}
+      {error ? (
+        <p className="mt-2 rounded-[5px] border border-[var(--red)] bg-[var(--surface-strong)] p-3 text-[12px] leading-5 text-[var(--red)]">
+          {error}
+        </p>
+      ) : null}
+    </section>
   );
 }
 
@@ -2278,9 +2424,14 @@ function TaskRow({
   onToggle: () => void;
 }) {
   const overdue = task.status !== "done" && isOverdue(task.dueDate);
+  // Weiche Projektfarbe als Zeilenhintergrund; erledigte Aufgaben blasser.
+  const tint = withAlpha(project?.color, task.status === "done" ? 0.08 : 0.16);
 
   return (
-    <div className="flex min-h-[66px] items-center gap-3 py-3">
+    <div
+      className="flex min-h-[66px] items-center gap-3 rounded-[7px] px-3 py-3"
+      style={tint ? { backgroundColor: tint } : undefined}
+    >
       <button
         type="button"
         onClick={onToggle}
@@ -2288,8 +2439,6 @@ function TaskRow({
       >
         {task.status === "done" ? (
           <CheckSquare2 className="h-5 w-5 fill-[var(--red)] text-white" />
-        ) : task.priority === "high" ? (
-          <Flag className="h-5 w-5 fill-[var(--red)] text-[var(--red)]" />
         ) : (
           <Circle className="h-5 w-5" />
         )}
@@ -2303,8 +2452,17 @@ function TaskRow({
         >
           {task.title}
         </p>
-        <p className="mt-1 truncate text-[12px] text-[var(--muted)]">
-          {project?.title ?? t("task.noProject")}
+        <p className="mt-1 flex min-w-0 items-center gap-2 text-[12px] text-[var(--muted)]">
+          <span
+            className="h-2 w-2 shrink-0 rounded-full"
+            style={{ backgroundColor: PRIORITY_COLORS[task.priority] }}
+            title={t(priorityKeys[task.priority])}
+            aria-label={t(priorityKeys[task.priority])}
+          />
+          <span className="truncate">{project?.title ?? t("task.noProject")}</span>
+          {task.priority === "high" && task.status !== "done" ? (
+            <Flag className="h-3.5 w-3.5 shrink-0 fill-[var(--red)] text-[var(--red)]" />
+          ) : null}
         </p>
       </button>
       <span
@@ -2805,6 +2963,25 @@ function ProjectEditor({
               placeholder={t("projectEditor.keywordsPlaceholder")}
               className={inputClass}
             />
+          </Field>
+          <Field label={t("projectEditor.color")}>
+            <div className="flex flex-wrap gap-2 pt-1">
+              {PROJECT_COLORS.map((color) => (
+                <button
+                  key={color}
+                  type="button"
+                  onClick={() => setDraft((current) => ({ ...current, color }))}
+                  aria-label={color}
+                  aria-pressed={draft.color === color}
+                  className={cx(
+                    "h-8 w-8 rounded-full border border-black/10 transition",
+                    draft.color === color &&
+                      "ring-2 ring-[var(--ink)] ring-offset-2 ring-offset-[var(--paper-soft)]",
+                  )}
+                  style={{ backgroundColor: color }}
+                />
+              ))}
+            </div>
           </Field>
           <label className="flex items-center justify-between rounded-[5px] border border-[var(--line)] bg-[var(--field)] px-3 py-3 text-[13px] font-bold">
             {t("projectEditor.aiLabel")}

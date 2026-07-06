@@ -57,6 +57,7 @@ const COLLECTIONS = [
       string("title", 256),
       string("description", 4096, false),
       string("keywords", 64, false, true),
+      string("color", 16, false),
       integer("progress"),
       boolean("aiEnabled"),
       string("createdAt", 32),
