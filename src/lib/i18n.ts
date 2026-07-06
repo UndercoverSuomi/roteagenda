@@ -330,6 +330,7 @@ const messages = {
   "theme.system": { de: "System", en: "System" },
   "theme.light": { de: "Hell", en: "Light" },
   "theme.dark": { de: "Dunkel", en: "Dark" },
+  "theme.toggle": { de: "Hell/Dunkel umschalten", en: "Toggle light/dark" },
   "more.deleteAll": { de: "Alle Daten löschen", en: "Delete all data" },
   "more.deleteAllTitle": {
     de: "Wirklich alle Projekte, Aufgaben, Notizen und Vorschläge löschen?",

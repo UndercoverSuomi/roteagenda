@@ -17,10 +17,12 @@ import {
   Inbox,
   Menu,
   Mic,
+  Moon,
   MoreHorizontal,
   Plus,
   Sparkles,
   Square,
+  Sun,
   Tags,
   Trash2,
   X,
@@ -703,8 +705,10 @@ export function RoteAgendaApp() {
         notice={recoverySent ? t("auth.recoverySent") : null}
         isSubmitting={isAuthSubmitting}
         locale={locale}
+        themePref={themePref}
         t={t}
         onLocaleChange={handleLocaleChange}
+        onThemeChange={handleThemeChange}
         onModeChange={(mode) => {
           setAuthMode(mode);
           setAuthError(null);
@@ -867,6 +871,7 @@ export function RoteAgendaApp() {
         t={t}
         onFilterChange={setTaskFilter}
         onOpenTask={openTask}
+        onOpenProject={openProject}
         onToggleTask={toggleTask}
         onCapture={() => navigate("capture")}
         onOpenInbox={() => navigate("inbox")}
@@ -889,8 +894,10 @@ export function RoteAgendaApp() {
           <DesktopSidebar
             screen={screen}
             pendingCount={pendingSuggestions.length}
+            themePref={themePref}
             t={t}
             onNavigate={navigate}
+            onThemeChange={handleThemeChange}
           />
         ) : null}
 
@@ -1047,8 +1054,10 @@ function AuthScreen({
   notice,
   isSubmitting,
   locale,
+  themePref,
   t,
   onLocaleChange,
+  onThemeChange,
   onModeChange,
   onSubmit,
 }: {
@@ -1057,8 +1066,10 @@ function AuthScreen({
   notice: string | null;
   isSubmitting: boolean;
   locale: Locale;
+  themePref: ThemePreference;
   t: Translator;
   onLocaleChange: (locale: Locale) => void;
+  onThemeChange: (preference: ThemePreference) => void;
   onModeChange: (mode: AuthMode) => void;
   onSubmit: (credentials: { email: string; password: string; name: string }) => void;
 }) {
@@ -1082,11 +1093,14 @@ function AuthScreen({
   return (
     <main className="grid min-h-screen place-items-center bg-[var(--paper)] px-6 text-[var(--ink)]">
       <section className="w-full max-w-[430px] rounded-[8px] border border-[var(--line)] bg-[var(--paper-soft)] p-7 shadow-sm">
-        <div className="flex items-start justify-between">
+        <div className="flex items-center justify-between">
           <p className="text-[11px] font-extrabold uppercase tracking-[0.05em] text-[var(--red)]">
             Rote Agenda
           </p>
-          <LocaleSwitch locale={locale} onChange={onLocaleChange} />
+          <div className="flex items-center gap-2">
+            <LocaleSwitch locale={locale} onChange={onLocaleChange} />
+            <ThemeToggleButton themePref={themePref} t={t} onChange={onThemeChange} />
+          </div>
         </div>
         <h1 className="mt-3 font-display text-[34px] font-bold">{title}</h1>
         {isRecover ? (
@@ -1183,6 +1197,35 @@ function AuthScreen({
   );
 }
 
+function ThemeToggleButton({
+  themePref,
+  t,
+  onChange,
+}: {
+  themePref: ThemePreference;
+  t: Translator;
+  onChange: (preference: ThemePreference) => void;
+}) {
+  // Wird nur clientseitig gerendert (nach dem Auth-Check), matchMedia ist daher sicher.
+  const isDark =
+    themePref === "dark" ||
+    (themePref === "system" &&
+      typeof window !== "undefined" &&
+      window.matchMedia("(prefers-color-scheme: dark)").matches);
+
+  return (
+    <button
+      type="button"
+      onClick={() => onChange(isDark ? "light" : "dark")}
+      aria-label={t("theme.toggle")}
+      title={t("theme.toggle")}
+      className="grid h-8 w-8 shrink-0 place-items-center rounded-[5px] border border-[var(--line)] text-[var(--muted)] transition hover:bg-[var(--surface-strong)] hover:text-[var(--ink)]"
+    >
+      {isDark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+    </button>
+  );
+}
+
 function LocaleSwitch({
   locale,
   onChange,
@@ -1274,6 +1317,8 @@ function WelcomeScreen({ t, onStart }: { t: Translator; onStart: () => void }) {
   );
 }
 
+type TaskGroup = { project: Project | undefined; tasks: Task[] };
+
 function TodayScreen({
   tasks,
   projects,
@@ -1283,6 +1328,7 @@ function TodayScreen({
   t,
   onFilterChange,
   onOpenTask,
+  onOpenProject,
   onToggleTask,
   onCapture,
   onOpenInbox,
@@ -1296,12 +1342,44 @@ function TodayScreen({
   t: Translator;
   onFilterChange: (filter: TaskFilter) => void;
   onOpenTask: (taskId: string) => void;
+  onOpenProject: (projectId: string) => void;
   onToggleTask: (taskId: string) => void;
   onCapture: () => void;
   onOpenInbox: () => void;
   onOpenMore: () => void;
 }) {
   const isBrandNew = !tasks.length && !aiStats.processedNotes && filter === "all";
+
+  // Aufgaben nach Projekt bündeln; Gruppen nach dringlichster offener
+  // Aufgabe sortieren (Reihenfolge innerhalb der Gruppe bleibt erhalten).
+  const groups = useMemo<TaskGroup[]>(() => {
+    const byProject = new Map<string, Task[]>();
+    for (const task of tasks) {
+      const list = byProject.get(task.projectId);
+      if (list) {
+        list.push(task);
+      } else {
+        byProject.set(task.projectId, [task]);
+      }
+    }
+
+    const rankOf = (group: TaskGroup) => {
+      const firstOpen = group.tasks.find((task) => task.status !== "done");
+      if (!firstOpen) return "9999-99-99";
+      return firstOpen.dueDate ?? "9999-99-98";
+    };
+
+    return Array.from(byProject.entries())
+      .map(([projectId, groupTasks]) => ({
+        project: projects.get(projectId),
+        tasks: groupTasks,
+      }))
+      .sort(
+        (a, b) =>
+          rankOf(a).localeCompare(rankOf(b)) ||
+          (a.project?.title ?? "").localeCompare(b.project?.title ?? ""),
+      );
+  }, [tasks, projects]);
 
   return (
     <div className="flex flex-1 flex-col px-6 pt-3 md:px-8 md:pt-8 lg:px-10">
@@ -1367,19 +1445,48 @@ function TodayScreen({
 
       <TaskTabs value={filter} t={t} onChange={onFilterChange} />
 
-      <div className="mt-4 space-y-2">
+      <div className="mt-4 space-y-6">
         {tasks.length ? (
-          tasks.map((task) => (
-            <TaskRow
-              key={task.id}
-              task={task}
-              project={projects.get(task.projectId)}
-              locale={locale}
-              t={t}
-              onOpen={() => onOpenTask(task.id)}
-              onToggle={() => onToggleTask(task.id)}
-            />
-          ))
+          groups.map((group) => {
+            const project = group.project;
+            const openCount = group.tasks.filter((task) => task.status !== "done").length;
+
+            return (
+              <section key={project?.id ?? "__none"}>
+                <button
+                  type="button"
+                  onClick={project ? () => onOpenProject(project.id) : undefined}
+                  disabled={!project}
+                  className="flex w-full items-center gap-2 px-1 text-left disabled:cursor-default"
+                >
+                  <span
+                    className="h-2.5 w-2.5 shrink-0 rounded-full"
+                    style={{ backgroundColor: project?.color ?? "var(--line-strong)" }}
+                  />
+                  <span className="truncate font-display text-[15px] font-bold">
+                    {project?.title ?? t("task.noProject")}
+                  </span>
+                  <span className="ml-auto shrink-0 text-[11px] font-semibold text-[var(--muted)]">
+                    {t("projects.openCount", { count: openCount })}
+                  </span>
+                </button>
+                <div className="mt-2 space-y-2">
+                  {group.tasks.map((task) => (
+                    <TaskRow
+                      key={task.id}
+                      task={task}
+                      project={project}
+                      locale={locale}
+                      t={t}
+                      hideProject
+                      onOpen={() => onOpenTask(task.id)}
+                      onToggle={() => onToggleTask(task.id)}
+                    />
+                  ))}
+                </div>
+              </section>
+            );
+          })
         ) : isBrandNew ? (
           <div className="mt-6 rounded-[7px] border border-dashed border-[var(--line-strong)] p-5">
             <p className="font-display text-[18px] font-bold">{t("today.welcomeTitle")}</p>
@@ -2205,33 +2312,38 @@ function MoreScreen({
             </select>
           </label>
         </section>
-        <section className="grid grid-cols-2 gap-3">
-          <div className="rounded-[6px] border border-[var(--line)] bg-[var(--surface)] p-4">
-            <label className="block">
-              <span className={labelClass}>{t("more.language")}</span>
-              <select
-                value={locale}
-                onChange={(event) => onLocaleChange(event.target.value as Locale)}
-                className={selectClass}
+        <section className="rounded-[6px] border border-[var(--line)] bg-[var(--surface)] p-4">
+          <label className="block">
+            <span className={labelClass}>{t("more.language")}</span>
+            <select
+              value={locale}
+              onChange={(event) => onLocaleChange(event.target.value as Locale)}
+              className={selectClass}
+            >
+              <option value="de">Deutsch</option>
+              <option value="en">English</option>
+            </select>
+          </label>
+        </section>
+        <section className="rounded-[6px] border border-[var(--line)] bg-[var(--surface)] p-4">
+          <span className={labelClass}>{t("more.theme")}</span>
+          <div className="grid grid-cols-3 gap-1 rounded-[5px] border border-[var(--line)] bg-[var(--field)] p-1">
+            {(["system", "light", "dark"] as const).map((option) => (
+              <button
+                key={option}
+                type="button"
+                onClick={() => onThemeChange(option)}
+                aria-pressed={themePref === option}
+                className={cx(
+                  "rounded-[4px] px-2 py-2 text-[12px] font-bold transition",
+                  themePref === option
+                    ? "bg-[var(--green)] text-white"
+                    : "text-[var(--muted)] hover:text-[var(--ink)]",
+                )}
               >
-                <option value="de">Deutsch</option>
-                <option value="en">English</option>
-              </select>
-            </label>
-          </div>
-          <div className="rounded-[6px] border border-[var(--line)] bg-[var(--surface)] p-4">
-            <label className="block">
-              <span className={labelClass}>{t("more.theme")}</span>
-              <select
-                value={themePref}
-                onChange={(event) => onThemeChange(event.target.value as ThemePreference)}
-                className={selectClass}
-              >
-                <option value="system">{t("theme.system")}</option>
-                <option value="light">{t("theme.light")}</option>
-                <option value="dark">{t("theme.dark")}</option>
-              </select>
-            </label>
+                {t(`theme.${option}`)}
+              </button>
+            ))}
           </div>
         </section>
         {confirmingDelete ? (
@@ -2413,6 +2525,7 @@ function TaskRow({
   project,
   locale,
   t,
+  hideProject,
   onOpen,
   onToggle,
 }: {
@@ -2420,6 +2533,7 @@ function TaskRow({
   project?: Project;
   locale: Locale;
   t: Translator;
+  hideProject?: boolean;
   onOpen: () => void;
   onToggle: () => void;
 }) {
@@ -2429,7 +2543,10 @@ function TaskRow({
 
   return (
     <div
-      className="flex min-h-[66px] items-center gap-3 rounded-[7px] px-3 py-3"
+      className={cx(
+        "flex items-center gap-3 rounded-[7px] px-3 py-3",
+        hideProject ? "min-h-[52px]" : "min-h-[66px]",
+      )}
       style={tint ? { backgroundColor: tint } : undefined}
     >
       <button
@@ -2444,26 +2561,30 @@ function TaskRow({
         )}
       </button>
       <button type="button" onClick={onOpen} className="min-w-0 flex-1 text-left">
-        <p
-          className={cx(
-            "truncate text-[14px] font-semibold",
-            task.status === "done" && "text-[var(--muted)] line-through",
-          )}
-        >
-          {task.title}
-        </p>
-        <p className="mt-1 flex min-w-0 items-center gap-2 text-[12px] text-[var(--muted)]">
+        <p className="flex min-w-0 items-center gap-2">
           <span
             className="h-2 w-2 shrink-0 rounded-full"
             style={{ backgroundColor: PRIORITY_COLORS[task.priority] }}
             title={t(priorityKeys[task.priority])}
             aria-label={t(priorityKeys[task.priority])}
           />
-          <span className="truncate">{project?.title ?? t("task.noProject")}</span>
+          <span
+            className={cx(
+              "truncate text-[14px] font-semibold",
+              task.status === "done" && "text-[var(--muted)] line-through",
+            )}
+          >
+            {task.title}
+          </span>
           {task.priority === "high" && task.status !== "done" ? (
             <Flag className="h-3.5 w-3.5 shrink-0 fill-[var(--red)] text-[var(--red)]" />
           ) : null}
         </p>
+        {!hideProject ? (
+          <p className="mt-1 truncate pl-4 text-[12px] text-[var(--muted)]">
+            {project?.title ?? t("task.noProject")}
+          </p>
+        ) : null}
       </button>
       <span
         className={cx(
@@ -3121,13 +3242,17 @@ function NavButton({
 function DesktopSidebar({
   screen,
   pendingCount,
+  themePref,
   t,
   onNavigate,
+  onThemeChange,
 }: {
   screen: Screen;
   pendingCount: number;
+  themePref: ThemePreference;
   t: Translator;
   onNavigate: (screen: Screen) => void;
+  onThemeChange: (preference: ThemePreference) => void;
 }) {
   const items = [
     { screen: "today" as Screen, label: t("nav.today"), icon: Home },
@@ -3143,7 +3268,10 @@ function DesktopSidebar({
   return (
     <aside className="sticky top-6 hidden rounded-[12px] border border-[var(--line)] bg-[var(--surface)] p-4 md:block">
       <div className="px-2">
-        <p className="font-display text-[24px] font-bold">Rote Agenda</p>
+        <div className="flex items-start justify-between gap-2">
+          <p className="font-display text-[24px] font-bold">Rote Agenda</p>
+          <ThemeToggleButton themePref={themePref} t={t} onChange={onThemeChange} />
+        </div>
         <p className="mt-2 text-[12px] leading-5 text-[var(--muted)]">
           {t("welcome.tagline")}
         </p>
