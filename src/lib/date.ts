@@ -34,13 +34,6 @@ export function addDays(date: Date, days: number) {
   return copy;
 }
 
-export function nextWeekday(from: Date, targetDay: number) {
-  const copy = new Date(from);
-  const delta = (targetDay + 7 - copy.getDay()) % 7 || 7;
-  copy.setDate(copy.getDate() + delta);
-  return copy;
-}
-
 export function formatDateLabel(isoDate: string | null, locale: Locale = "de") {
   if (!isoDate) return translate(locale, "date.none");
 
