@@ -1,9 +1,4 @@
-import { Account, Client } from "appwrite";
 import { NextResponse } from "next/server";
-import {
-  APPWRITE_ENDPOINT,
-  APPWRITE_PROJECT_ID,
-} from "@/lib/appwrite-config";
 import { MAX_NOTE_LENGTH } from "@/lib/ai-models";
 import { isLocale } from "@/lib/i18n";
 import {
@@ -11,6 +6,11 @@ import {
   callAiProvider,
   resolveAiModelConfig,
 } from "@/lib/ai-server";
+import {
+  createRateLimiter,
+  requireAppwriteUser,
+  RouteError,
+} from "@/lib/route-auth";
 import type { Project } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -23,33 +23,16 @@ type ProcessNoteRequestBody = {
   locale?: unknown;
 };
 
-// Einfache Kostenbremse pro Nutzer und Server-Instanz.
-const RATE_LIMIT_WINDOW_MS = 10 * 60_000;
-const RATE_LIMIT_MAX_REQUESTS = 20;
-const requestLog = new Map<string, number[]>();
+const enforceRateLimit = createRateLimiter(10 * 60_000, 20);
 
 type RequestProject = Pick<
   Project,
   "id" | "title" | "description" | "keywords" | "aiEnabled"
 >;
 
-class RouteError extends Error {
-  constructor(
-    message: string,
-    readonly status: number,
-  ) {
-    super(message);
-  }
-}
-
 export async function POST(request: Request) {
   try {
-    const jwt = readBearerToken(request.headers.get("authorization"));
-    if (!jwt) {
-      return jsonError("Bitte melde dich erneut an. Die KI-Anfrage braucht eine gültige Appwrite-Sitzung.", 401);
-    }
-
-    const user = await verifyAppwriteJwt(jwt);
+    const user = await requireAppwriteUser(request);
     enforceRateLimit(user.$id);
 
     const body = await readJsonBody(request);
@@ -93,29 +76,6 @@ export async function POST(request: Request) {
   }
 }
 
-function readBearerToken(value: string | null) {
-  if (!value) return null;
-  const match = value.match(/^Bearer\s+(.+)$/i);
-  return match?.[1]?.trim() || null;
-}
-
-async function verifyAppwriteJwt(jwt: string) {
-  const client = new Client()
-    .setEndpoint(APPWRITE_ENDPOINT)
-    .setProject(APPWRITE_PROJECT_ID)
-    .setJWT(jwt);
-  const account = new Account(client);
-
-  try {
-    return await account.get();
-  } catch {
-    throw new RouteError(
-      "Bitte melde dich erneut an. Die Appwrite-Sitzung konnte nicht geprüft werden.",
-      401,
-    );
-  }
-}
-
 async function readJsonBody(request: Request): Promise<ProcessNoteRequestBody> {
   try {
     const body = (await request.json()) as unknown;
@@ -127,23 +87,6 @@ async function readJsonBody(request: Request): Promise<ProcessNoteRequestBody> {
   } catch {
     throw new RouteError("Die KI-Anfrage konnte nicht gelesen werden.", 400);
   }
-}
-
-function enforceRateLimit(userId: string) {
-  const now = Date.now();
-  const recent = (requestLog.get(userId) ?? []).filter(
-    (timestamp) => now - timestamp < RATE_LIMIT_WINDOW_MS,
-  );
-
-  if (recent.length >= RATE_LIMIT_MAX_REQUESTS) {
-    throw new RouteError(
-      "Zu viele KI-Anfragen in kurzer Zeit. Bitte warte ein paar Minuten und versuche es erneut.",
-      429,
-    );
-  }
-
-  recent.push(now);
-  requestLog.set(userId, recent);
 }
 
 function readNote(value: unknown) {

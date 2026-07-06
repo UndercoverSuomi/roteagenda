@@ -579,3 +579,88 @@ function createId(prefix: string) {
     .toString(36)
     .slice(2, 8)}`;
 }
+
+// ── Sprachnotiz-Transkription über OpenRouter ───────────────────────
+
+const DEFAULT_TRANSCRIBE_MODEL = "google/gemini-2.5-flash";
+
+type TranscribeParams = {
+  audioBase64: string;
+  format: "wav" | "mp3";
+  locale?: Locale;
+  env?: Env;
+  fetchFn?: typeof fetch;
+};
+
+type TranscribeResolveResult =
+  | { ok: true; apiKey: string; model: string; baseUrl: string }
+  | { ok: false; error: string; status: number };
+
+export function resolveTranscriptionConfig(
+  env: Env = process.env,
+): TranscribeResolveResult {
+  const apiKey = env[OPENROUTER_KEY_ENV]?.trim();
+
+  if (!apiKey) {
+    return {
+      ok: false,
+      status: 503,
+      error: `Die Sprachtranskription benötigt ${OPENROUTER_KEY_ENV}. Bitte setze die Environment Variable in Appwrite/Next.`,
+    };
+  }
+
+  return {
+    ok: true,
+    apiKey,
+    model: env.OPENROUTER_TRANSCRIBE_MODEL?.trim() || DEFAULT_TRANSCRIBE_MODEL,
+    baseUrl: env[OPENROUTER_BASE_URL_ENV]?.trim() || DEFAULT_OPENROUTER_BASE_URL,
+  };
+}
+
+export async function transcribeAudio({
+  audioBase64,
+  format,
+  locale = "de",
+  env = process.env,
+  fetchFn = fetch,
+}: TranscribeParams): Promise<string> {
+  const config = resolveTranscriptionConfig(env);
+  if (!config.ok) {
+    throw new Error(config.error);
+  }
+
+  const instruction =
+    locale === "en"
+      ? "Transcribe this voice note verbatim in the language it is spoken in. Return only the transcribed text, without quotes or comments."
+      : "Transkribiere diese Sprachnotiz wörtlich in der gesprochenen Sprache. Gib ausschließlich den transkribierten Text zurück, ohne Anführungszeichen oder Kommentare.";
+
+  const response = await fetchFn(joinUrl(config.baseUrl, "chat/completions"), {
+    method: "POST",
+    headers: providerHeaders(config.apiKey),
+    body: JSON.stringify({
+      model: config.model,
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: instruction },
+            {
+              type: "input_audio",
+              input_audio: { data: audioBase64, format },
+            },
+          ],
+        },
+      ],
+      max_tokens: 2000,
+    }),
+  });
+
+  const payload = await readJsonResponse(response, "Transkription");
+  const text = extractProviderText(payload).trim();
+
+  if (!text) {
+    throw new Error("Die Transkription hat keinen Text erkannt.");
+  }
+
+  return text;
+}

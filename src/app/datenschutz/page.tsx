@@ -54,10 +54,12 @@ export default function DatenschutzPage() {
             Wenn du eine Rohnotiz mit der KI verarbeitest, werden der Notiztext sowie
             Titel, Beschreibungen und Keywords deiner Projekte an den von dir in den
             Einstellungen gewählten KI-Anbieter übermittelt, um Aufgabenvorschläge zu
-            erzeugen. [PLATZHALTER: Liste der tatsächlich konfigurierten Anbieter samt
-            Sitz/Drittlandtransfer, z. B. OpenAI (USA) – je nachdem, welche API-Keys
-            produktiv gesetzt sind.] Die Verarbeitung erfolgt nur auf deine aktive
-            Anfrage hin.
+            erzeugen. Nutzt du die Spracheingabe, wird die Tonaufnahme deiner Notiz
+            zur Transkription ebenfalls an den konfigurierten KI-Anbieter übermittelt
+            und dort nicht dauerhaft gespeichert. [PLATZHALTER: Liste der tatsächlich
+            konfigurierten Anbieter samt Sitz/Drittlandtransfer, z. B. OpenRouter/
+            Google (USA) – je nachdem, welche API-Keys produktiv gesetzt sind.] Die
+            Verarbeitung erfolgt nur auf deine aktive Anfrage hin.
           </p>
         </div>
 
@@ -70,9 +72,7 @@ export default function DatenschutzPage() {
             oder Google Tasks übergeben. Dabei werden Titel, Beschreibung und
             Termin der jeweiligen Aufgabe an Google (Google Ireland Ltd. bzw.
             Google LLC, USA) übermittelt – nur auf deine aktive Anfrage hin und
-            nach Bestätigung im Google-Anmeldefenster. Nutzt du die
-            Spracheingabe, verarbeitet dein Browser die Aufnahme; bei Chrome
-            geschieht die Spracherkennung auf Google-Servern.
+            nach Bestätigung im Google-Anmeldefenster.
           </p>
         </div>
 

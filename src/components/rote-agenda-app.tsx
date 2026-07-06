@@ -15,6 +15,7 @@ import {
   FolderKanban,
   Home,
   Inbox,
+  Loader2,
   Menu,
   Mic,
   Moon,
@@ -30,7 +31,7 @@ import {
 import { ID, type Models } from "appwrite";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { account, client } from "@/lib/appwrite";
-import { processRawNoteWithConfiguredAi } from "@/lib/ai-client";
+import { processRawNoteWithConfiguredAi, transcribeVoiceNote } from "@/lib/ai-client";
 import { AI_MODEL_OPTIONS, MAX_NOTE_LENGTH, type AiModelId } from "@/lib/ai-models";
 import { createEmptyAppData } from "@/lib/app-data";
 import {
@@ -62,6 +63,13 @@ import {
   pickProjectColor,
   withAlpha,
 } from "@/lib/project-colors";
+import {
+  blobToWavBase64,
+  isRecordingSupported,
+  MAX_RECORDING_SECONDS,
+  startRecording,
+  type ActiveRecording,
+} from "@/lib/recorder";
 import {
   applyTheme,
   readStoredTheme,
@@ -101,34 +109,6 @@ const statusKeys: Record<TaskStatus, MessageKey> = {
 
 function cx(...classes: Array<string | false | null | undefined>) {
   return classes.filter(Boolean).join(" ");
-}
-
-// Minimale Typen für die Web Speech API (nicht Teil der TS-DOM-Typen).
-type SpeechAlternativeLike = { transcript: string };
-type SpeechResultLike = { isFinal: boolean; 0: SpeechAlternativeLike };
-type SpeechResultListLike = { length: number; [index: number]: SpeechResultLike };
-type SpeechEventLike = { resultIndex: number; results: SpeechResultListLike };
-type SpeechErrorEventLike = { error: string };
-type SpeechRecognitionLike = {
-  lang: string;
-  continuous: boolean;
-  interimResults: boolean;
-  onresult: ((event: SpeechEventLike) => void) | null;
-  onerror: ((event: SpeechErrorEventLike) => void) | null;
-  onend: (() => void) | null;
-  start: () => void;
-  stop: () => void;
-};
-
-function getSpeechRecognitionCtor(): (new () => SpeechRecognitionLike) | null {
-  if (typeof window === "undefined") return null;
-
-  const candidates = window as unknown as {
-    SpeechRecognition?: new () => SpeechRecognitionLike;
-    webkitSpeechRecognition?: new () => SpeechRecognitionLike;
-  };
-
-  return candidates.SpeechRecognition ?? candidates.webkitSpeechRecognition ?? null;
 }
 
 const WELCOME_SEEN_KEY = "rote-agenda-welcome-done";
@@ -1547,76 +1527,88 @@ function CaptureScreen({
   onEditSuggestion: (suggestionId: string | null) => void;
   onUpdateSuggestion: (suggestion: AiSuggestion) => void;
 }) {
-  const [isRecording, setIsRecording] = useState(false);
+  const [micState, setMicState] = useState<"idle" | "recording" | "transcribing">("idle");
   // Der Capture-Screen wird nie serverseitig gerendert,
   // daher ist die direkte Browser-Erkennung hydration-sicher.
-  const [isMicSupported] = useState(() => Boolean(getSpeechRecognitionCtor()));
+  const [isMicSupported] = useState(() => isRecordingSupported());
   const [micError, setMicError] = useState<string | null>(null);
-  const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const recordingRef = useRef<ActiveRecording | null>(null);
 
   useEffect(() => {
     return () => {
-      recognitionRef.current?.stop();
-      recognitionRef.current = null;
+      recordingRef.current?.cancel();
+      recordingRef.current = null;
     };
   }, []);
 
-  function stopRecording() {
-    recognitionRef.current?.stop();
-    recognitionRef.current = null;
-    setIsRecording(false);
+  // Sekundenzähler; stoppt die Aufnahme automatisch am Limit.
+  useEffect(() => {
+    if (micState !== "recording") return;
+
+    const startedAt = Date.now();
+    const timer = window.setInterval(() => {
+      const seconds = Math.floor((Date.now() - startedAt) / 1000);
+      setElapsedSeconds(seconds);
+      if (seconds >= MAX_RECORDING_SECONDS) {
+        void finishRecording();
+      }
+    }, 500);
+
+    return () => window.clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [micState]);
+
+  async function beginRecording() {
+    setMicError(null);
+    setElapsedSeconds(0);
+
+    try {
+      const recording = await startRecording();
+      recordingRef.current = recording;
+      setMicState("recording");
+    } catch (recordError) {
+      const denied =
+        recordError instanceof DOMException &&
+        (recordError.name === "NotAllowedError" || recordError.name === "SecurityError");
+      setMicError(t(denied ? "capture.mic.denied" : "capture.mic.error"));
+    }
+  }
+
+  async function finishRecording() {
+    const active = recordingRef.current;
+    if (!active) return;
+    recordingRef.current = null;
+    setMicState("transcribing");
+
+    try {
+      const blob = await active.stop();
+      const audioBase64 = await blobToWavBase64(blob);
+      const text = await transcribeVoiceNote({ audioBase64, locale });
+      onAppendText(text);
+      setMicState("idle");
+    } catch (transcribeError) {
+      setMicState("idle");
+      setMicError(
+        transcribeError instanceof Error && transcribeError.message
+          ? transcribeError.message
+          : t("capture.mic.error"),
+      );
+    }
   }
 
   function toggleRecording() {
-    if (isRecording) {
-      stopRecording();
-      return;
+    if (micState === "recording") {
+      void finishRecording();
+    } else if (micState === "idle") {
+      void beginRecording();
     }
+  }
 
-    const RecognitionCtor = getSpeechRecognitionCtor();
-    if (!RecognitionCtor) return;
-
-    setMicError(null);
-    const recognition = new RecognitionCtor();
-    recognition.lang = locale === "de" ? "de-DE" : "en-US";
-    recognition.continuous = true;
-    recognition.interimResults = false;
-    recognition.onresult = (event) => {
-      const transcripts: string[] = [];
-      for (let index = event.resultIndex; index < event.results.length; index++) {
-        const result = event.results[index];
-        if (result.isFinal) {
-          const transcript = result[0]?.transcript.trim();
-          if (transcript) transcripts.push(transcript);
-        }
-      }
-      if (transcripts.length) onAppendText(transcripts.join(" "));
-    };
-    recognition.onerror = (event) => {
-      setMicError(
-        t(
-          event.error === "not-allowed" || event.error === "service-not-allowed"
-            ? "capture.mic.denied"
-            : "capture.mic.error",
-        ),
-      );
-      recognitionRef.current = null;
-      setIsRecording(false);
-    };
-    recognition.onend = () => {
-      recognitionRef.current = null;
-      setIsRecording(false);
-    };
-
-    recognitionRef.current = recognition;
-    setIsRecording(true);
-    try {
-      recognition.start();
-    } catch {
-      recognitionRef.current = null;
-      setIsRecording(false);
-      setMicError(t("capture.mic.error"));
-    }
+  function formatSeconds(totalSeconds: number) {
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = String(totalSeconds % 60).padStart(2, "0");
+    return `${minutes}:${seconds}`;
   }
 
   return (
@@ -1642,18 +1634,29 @@ function CaptureScreen({
             <button
               type="button"
               onClick={toggleRecording}
-              aria-label={isRecording ? t("capture.mic.stop") : t("capture.mic.start")}
+              disabled={micState === "transcribing"}
+              aria-label={
+                micState === "recording" ? t("capture.mic.stop") : t("capture.mic.start")
+              }
               className={cx(
                 "grid h-11 w-11 shrink-0 place-items-center rounded-full transition",
-                isRecording
+                micState === "recording"
                   ? "mic-recording bg-[var(--red)] text-white"
-                  : "border border-[var(--line-strong)] text-[var(--ink)] hover:bg-[var(--surface-strong)]",
+                  : "border border-[var(--line-strong)] text-[var(--ink)] hover:bg-[var(--surface-strong)] disabled:opacity-60",
               )}
             >
-              <Mic className="h-5 w-5" />
+              {micState === "transcribing" ? (
+                <Loader2 className="h-5 w-5 animate-spin" />
+              ) : (
+                <Mic className="h-5 w-5" />
+              )}
             </button>
             <span className="text-[12px] leading-5 text-[var(--muted)]">
-              {isRecording ? t("capture.mic.listening") : t("capture.mic.start")}
+              {micState === "recording"
+                ? `${t("capture.mic.listening")} (${formatSeconds(elapsedSeconds)} / ${formatSeconds(MAX_RECORDING_SECONDS)})`
+                : micState === "transcribing"
+                  ? t("capture.mic.transcribing")
+                  : t("capture.mic.start")}
             </span>
           </div>
         ) : null}

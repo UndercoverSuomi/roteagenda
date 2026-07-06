@@ -11,6 +11,8 @@ import {
   extractProviderText,
   parseProviderJson,
   resolveAiModelConfig,
+  resolveTranscriptionConfig,
+  transcribeAudio,
 } from "./ai-server.ts";
 
 test("default model is one of the selectable AI models", () => {
@@ -220,6 +222,65 @@ test("chat completion providers are called with configured endpoint and bearer k
   assert.equal(calls[0].url, "https://example.test/v1/chat/completions");
   assert.equal(calls[0].init.headers.Authorization, "Bearer secret-key");
   assert.equal(JSON.parse(calls[0].init.body).model, "glm-test");
+});
+
+test("transcription requires the openrouter key", () => {
+  const result = resolveTranscriptionConfig({});
+
+  assert.equal(result.ok, false);
+  assert.match(result.error, /OPENROUTER_API_KEY/);
+});
+
+test("transcription sends audio to an audio-capable openrouter model", async () => {
+  const calls = [];
+  const text = await transcribeAudio({
+    audioBase64: "QUJD",
+    format: "wav",
+    locale: "de",
+    env: { OPENROUTER_API_KEY: "sk-or-test" },
+    fetchFn: async (url, init) => {
+      calls.push({ url: String(url), init });
+      return new Response(
+        JSON.stringify({
+          choices: [{ message: { content: " Angebot bis Freitag fertig machen " } }],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    },
+  });
+
+  assert.equal(text, "Angebot bis Freitag fertig machen");
+  assert.equal(calls[0].url, "https://openrouter.ai/api/v1/chat/completions");
+  assert.equal(calls[0].init.headers.Authorization, "Bearer sk-or-test");
+
+  const body = JSON.parse(calls[0].init.body);
+  assert.equal(body.model, "google/gemini-2.5-flash");
+  const audioPart = body.messages[0].content.find(
+    (part) => part.type === "input_audio",
+  );
+  assert.equal(audioPart.input_audio.data, "QUJD");
+  assert.equal(audioPart.input_audio.format, "wav");
+});
+
+test("transcription model can be overridden via env", async () => {
+  const calls = [];
+  await transcribeAudio({
+    audioBase64: "QUJD",
+    format: "wav",
+    env: {
+      OPENROUTER_API_KEY: "sk-or-test",
+      OPENROUTER_TRANSCRIBE_MODEL: "openai/gpt-4o-audio-preview",
+    },
+    fetchFn: async (url, init) => {
+      calls.push({ init });
+      return new Response(
+        JSON.stringify({ choices: [{ message: { content: "ok" } }] }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    },
+  });
+
+  assert.equal(JSON.parse(calls[0].init.body).model, "openai/gpt-4o-audio-preview");
 });
 
 test("provider HTTP errors are surfaced clearly", async () => {

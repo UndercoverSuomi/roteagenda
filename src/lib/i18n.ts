@@ -131,8 +131,12 @@ const messages = {
   "capture.mic.start": { de: "Notiz einsprechen", en: "Dictate a note" },
   "capture.mic.stop": { de: "Aufnahme stoppen", en: "Stop recording" },
   "capture.mic.listening": {
-    de: "Aufnahme läuft – sprich einfach los.",
-    en: "Recording – just start talking.",
+    de: "Aufnahme läuft – zum Stoppen aufs Mikrofon tippen.",
+    en: "Recording – tap the microphone to stop.",
+  },
+  "capture.mic.transcribing": {
+    de: "Wird transkribiert...",
+    en: "Transcribing...",
   },
   "capture.mic.denied": {
     de: "Mikrofon-Zugriff wurde abgelehnt. Erlaube ihn in den Browser-Einstellungen.",

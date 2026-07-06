@@ -7,7 +7,7 @@ Die Oberflaeche ist zuerst als responsives Webtool gedacht: schnell am Handy erf
 ## Kernflow
 
 - Registrieren oder anmelden (inkl. Passwort-zuruecksetzen per E-Mail)
-- Notiz schnell erfassen — getippt oder per Mikrofon eingesprochen (Web Speech API)
+- Notiz schnell erfassen — getippt oder per Mikrofon eingesprochen (Aufnahme wird serverseitig ueber ein audiofaehiges OpenRouter-Modell transkribiert, Standard `google/gemini-2.5-flash`, Override via `OPENROUTER_TRANSCRIBE_MODEL`)
 - KI verarbeitet und klassifiziert die Rohnotiz (mit aktuellem Datum als Referenz, auf Deutsch oder Englisch)
 - Vorschlag pruefen, bearbeiten, uebernehmen oder ignorieren
 - Aufgabe erscheint im passenden Projekt und auf dem Heute-Dashboard

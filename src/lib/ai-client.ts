@@ -59,3 +59,43 @@ export async function processRawNoteWithConfiguredAi({
     suggestions: payload.suggestions,
   };
 }
+
+export async function transcribeVoiceNote({
+  audioBase64,
+  locale,
+}: {
+  audioBase64: string;
+  locale: Locale;
+}): Promise<string> {
+  const jwt = await account.createJWT({ duration: 900 });
+  const response = await fetch("/api/ai/transcribe", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${jwt.jwt}`,
+      "Content-Type": "application/json",
+      Accept: "application/json",
+    },
+    body: JSON.stringify({
+      audio: audioBase64,
+      format: "wav",
+      locale,
+    }),
+  });
+
+  const payload = (await response.json().catch(() => null)) as
+    | { text?: string; error?: string }
+    | null;
+
+  if (!response.ok) {
+    throw new Error(
+      payload?.error ??
+        `Die Transkription ist fehlgeschlagen (${response.status}). Bitte prüfe die Konfiguration.`,
+    );
+  }
+
+  if (!payload?.text) {
+    throw new Error("Die Transkription hat keinen Text geliefert.");
+  }
+
+  return payload.text;
+}
