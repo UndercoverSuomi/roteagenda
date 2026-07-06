@@ -1,17 +1,17 @@
 # Rote Agenda
 
-Rote Agenda ist ein webbasiertes, mobile-first MVP fuer Capture-first Aufgaben- und Projektorganisation. Rohnotizen werden serverseitig mit einem zentral konfigurierten KI-Anbieter in strukturierte Aufgaben, Projektzuordnungen, Deadlines, Prioritaeten und pruefbare Vorschlaege uebersetzt.
+Rote Agenda ist ein webbasiertes, mobile-first Tool fuer Capture-first Aufgaben- und Projektorganisation. Rohnotizen werden serverseitig mit einem zentral konfigurierten KI-Anbieter in strukturierte Aufgaben, Projektzuordnungen, Deadlines, Prioritaeten und pruefbare Vorschlaege uebersetzt.
 
-Die Oberflaeche ist zuerst als responsives Webtool gedacht: schnell am Handy erfassen, bequem am Desktop pruefen und organisieren. Die mobile Informationsarchitektur bleibt bewusst App-tauglich, damit spaeter eine Android-Version darauf aufbauen kann.
+Die Oberflaeche ist zuerst als responsives Webtool gedacht: schnell am Handy erfassen, bequem am Desktop pruefen und organisieren. Die App ist als PWA installierbar; die mobile Informationsarchitektur bleibt bewusst App-tauglich, damit spaeter eine Android-Version darauf aufbauen kann.
 
 ## Kernflow
 
-- Anmelden oder registrieren
+- Registrieren oder anmelden (inkl. Passwort-zuruecksetzen per E-Mail)
 - Notiz schnell erfassen
-- KI verarbeitet und klassifiziert die Rohnotiz
+- KI verarbeitet und klassifiziert die Rohnotiz (mit aktuellem Datum als Referenz)
 - Vorschlag pruefen, bearbeiten, uebernehmen oder ignorieren
 - Aufgabe erscheint im passenden Projekt und auf dem Heute-Dashboard
-- Aufgaben abhaken und manuell bearbeiten
+- Aufgaben abhaken, bearbeiten, Projekte anlegen und verwalten
 
 ## Tech Stack
 
@@ -20,36 +20,38 @@ Die Oberflaeche ist zuerst als responsives Webtool gedacht: schnell am Handy erf
 - TypeScript
 - Tailwind CSS
 - lucide-react
-- Appwrite Auth
-- Appwrite Databases
+- Appwrite Auth + Appwrite Databases (Web SDK)
 - zentral konfigurierte KI-Provider ueber Next.js Route Handler
 
-## Entwicklung
+## Setup
+
+### 1. Appwrite vorbereiten
+
+Einmalig einen API-Key in der Appwrite Console anlegen (Overview → Integrations → API keys; bei den Scopes alle Eintraege der Kategorie **Databases** anhaken, d. h. `databases.*`, `collections.*` und `attributes.*` jeweils mit read und write) und dann:
 
 ```bash
-npm run dev
+npm install
+APPWRITE_API_KEY=<api-key> node scripts/setup-appwrite.mjs
 ```
 
-Danach http://localhost:3000 oeffnen.
+Das Script legt idempotent die Datenbank `roteagenda` mit den vier Collections `projects`, `tasks`, `rawNotes` und `suggestions` samt Attributen an und schreibt die IDs in `.env.local`. Da der Code dieselben IDs als Defaults nutzt, sind abweichende Environment Variables nur noch bei eigenen IDs noetig.
 
-## Appwrite und KI
+Zusaetzlich in der Appwrite Console:
 
-Die App erfordert Appwrite Auth und Appwrite Databases. Nutzer melden sich per E-Mail und Passwort an; Projekte, Aufgaben, Rohnotizen, Vorschlaege, Tags und die Modellwahl werden in Appwrite gespeichert.
+- `Auth` → E-Mail/Passwort-Login aktivieren
+- `Overview` → `Platforms` → Web-Plattform fuer `localhost` und die Produktions-Domain eintragen (noetig fuer Login und den Passwort-Reset-Link)
 
-Pflichtwerte fuer Appwrite:
+### 2. KI-Provider konfigurieren
+
+Zentrale KI-Keys werden nur serverseitig gesetzt (lokal in `.env.local`, in Produktion als Appwrite-Site-Variablen). Ohne Key fuer das gewaehlte Modell liefert die App eine klare Fehlermeldung — es gibt keinen Mock-Fallback.
+
+**Empfohlen: OpenRouter.** Ein einziger Key schaltet alle Modelle frei:
 
 ```bash
-NEXT_PUBLIC_APPWRITE_ENDPOINT=https://fra.cloud.appwrite.io/v1
-NEXT_PUBLIC_APPWRITE_PROJECT_ID=6a3bbc6600236e6bf22a
-NEXT_PUBLIC_APPWRITE_DATABASE_ID=...
-NEXT_PUBLIC_APPWRITE_PROJECTS_COLLECTION_ID=...
-NEXT_PUBLIC_APPWRITE_TASKS_COLLECTION_ID=...
-NEXT_PUBLIC_APPWRITE_RAW_NOTES_COLLECTION_ID=...
-NEXT_PUBLIC_APPWRITE_SUGGESTIONS_COLLECTION_ID=...
-NEXT_PUBLIC_APPWRITE_TAGS_COLLECTION_ID=...
+OPENROUTER_API_KEY=sk-or-v1-...
 ```
 
-Zentrale KI-Keys werden nur serverseitig als Appwrite/Next Environment Variables gesetzt. Wenn ein gewaehltes Modell keinen Key hat oder ein Anbieter fehlerhaft antwortet, zeigt die App eine klare Fehlermeldung und nutzt keinen Mock-Fallback.
+**Alternativ: direkte Provider-Keys.** Sie haben Vorrang vor OpenRouter, falls beides gesetzt ist:
 
 ```bash
 OPENAI_API_KEY=...
@@ -60,27 +62,15 @@ MINIMAX_API_KEY=...
 DEEPSEEK_API_KEY=...
 ```
 
-Optionale Overrides fuer Provider-Base-URLs und Modell-Slugs:
+Optionale Overrides fuer Base-URLs und Modell-Slugs stehen in [.env.example](.env.example). Die Route `/api/ai/process-note` verlangt eine gueltige Appwrite-Session (JWT), begrenzt Notizen auf 4000 Zeichen und drosselt auf 20 Anfragen pro Nutzer und 10 Minuten.
+
+### 3. Entwicklung
 
 ```bash
-OPENAI_GPT_5_5_MODEL=gpt-5.5
-ZAI_BASE_URL=https://api.z.ai/api/paas/v4
-ZAI_GLM_5_2_MODEL=glm-5.2
-MOONSHOT_BASE_URL=https://api.moonshot.ai/v1
-MOONSHOT_KIMI_K2_7_MODEL=kimi-k2.7
-DASHSCOPE_BASE_URL=https://dashscope-intl.aliyuncs.com/compatible-mode/v1
-DASHSCOPE_QWEN_3_7_PLUS_MODEL=qwen3.7-plus
-DASHSCOPE_QWEN_3_7_MAX_MODEL=qwen3.7-max
-MINIMAX_BASE_URL=https://api.minimax.io/v1
-MINIMAX_M3_MODEL=MiniMax-M3
-DEEPSEEK_BASE_URL=https://api.deepseek.com
-DEEPSEEK_V4_PRO_MODEL=deepseek-v4-pro
-DEEPSEEK_V4_FLASH_MODEL=deepseek-v4-flash
+npm run dev
 ```
 
-## Hosting
-
-Die App ist fuer Appwrite Sites vorbereitet. Die exakten Schritte stehen in [docs/appwrite-hosting.md](docs/appwrite-hosting.md).
+Danach http://localhost:3000 oeffnen und registrieren. Neue Accounts starten leer; Projekte entstehen manuell oder aus KI-Vorschlaegen.
 
 ## Checks
 
@@ -89,3 +79,13 @@ npm test
 npm run lint
 npm run build
 ```
+
+Alle drei Checks laufen auch als GitHub Action bei jedem Push.
+
+## Hosting
+
+Die App ist fuer Appwrite Sites vorbereitet. Die exakten Schritte stehen in [docs/appwrite-hosting.md](docs/appwrite-hosting.md).
+
+## Rechtliches
+
+`/impressum` und `/datenschutz` enthalten Geruest-Seiten mit `[PLATZHALTER]`-Markierungen, die vor dem oeffentlichen Betrieb ausgefuellt werden muessen.

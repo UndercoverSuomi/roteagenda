@@ -1,6 +1,7 @@
 import { account } from "@/lib/appwrite";
 import type { AiModelId } from "@/lib/ai-models";
 import type { AiProcessingResult } from "@/lib/ai-server";
+import { toIsoDate } from "@/lib/date";
 import type { Project } from "@/lib/types";
 
 type ProcessNoteRequest = {
@@ -30,6 +31,7 @@ export async function processRawNoteWithConfiguredAi({
       note,
       modelId,
       projects,
+      today: toIsoDate(new Date()),
     }),
   });
 

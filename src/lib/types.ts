@@ -58,12 +58,6 @@ export interface AiSuggestion {
   createdAt: string;
 }
 
-export interface Tag {
-  id: string;
-  label: string;
-  color: string;
-}
-
 export interface UserSettings {
   aiModel: AiModelId;
 }
@@ -75,5 +69,4 @@ export interface AppData {
   tasks: Task[];
   rawNotes: RawNote[];
   suggestions: AiSuggestion[];
-  tags: Tag[];
 }

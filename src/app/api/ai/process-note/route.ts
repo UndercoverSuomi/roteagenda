@@ -4,6 +4,7 @@ import {
   APPWRITE_ENDPOINT,
   APPWRITE_PROJECT_ID,
 } from "@/lib/appwrite-config";
+import { MAX_NOTE_LENGTH } from "@/lib/ai-models";
 import {
   buildProcessingResultFromProviderText,
   callAiProvider,
@@ -17,7 +18,13 @@ type ProcessNoteRequestBody = {
   note?: unknown;
   modelId?: unknown;
   projects?: unknown;
+  today?: unknown;
 };
+
+// Einfache Kostenbremse pro Nutzer und Server-Instanz.
+const RATE_LIMIT_WINDOW_MS = 10 * 60_000;
+const RATE_LIMIT_MAX_REQUESTS = 20;
+const requestLog = new Map<string, number[]>();
 
 type RequestProject = Pick<
   Project,
@@ -41,10 +48,13 @@ export async function POST(request: Request) {
     }
 
     const user = await verifyAppwriteJwt(jwt);
+    enforceRateLimit(user.$id);
+
     const body = await readJsonBody(request);
     const note = readNote(body.note);
     const modelId = readModelId(body.modelId);
     const projects = readProjects(body.projects);
+    const today = readToday(body.today);
     const resolved = resolveAiModelConfig(modelId);
 
     if (!resolved.ok) {
@@ -55,6 +65,7 @@ export async function POST(request: Request) {
       config: resolved.config,
       note,
       projects,
+      today,
     });
     const result = buildProcessingResultFromProviderText({
       note,
@@ -114,12 +125,45 @@ async function readJsonBody(request: Request): Promise<ProcessNoteRequestBody> {
   }
 }
 
+function enforceRateLimit(userId: string) {
+  const now = Date.now();
+  const recent = (requestLog.get(userId) ?? []).filter(
+    (timestamp) => now - timestamp < RATE_LIMIT_WINDOW_MS,
+  );
+
+  if (recent.length >= RATE_LIMIT_MAX_REQUESTS) {
+    throw new RouteError(
+      "Zu viele KI-Anfragen in kurzer Zeit. Bitte warte ein paar Minuten und versuche es erneut.",
+      429,
+    );
+  }
+
+  recent.push(now);
+  requestLog.set(userId, recent);
+}
+
 function readNote(value: unknown) {
   if (typeof value !== "string" || !value.trim()) {
     throw new RouteError("Bitte gib eine Rohnotiz ein, bevor du die KI startest.", 400);
   }
 
-  return value.trim();
+  const note = value.trim();
+  if (note.length > MAX_NOTE_LENGTH) {
+    throw new RouteError(
+      `Die Notiz ist zu lang (${note.length} Zeichen). Erlaubt sind maximal ${MAX_NOTE_LENGTH} Zeichen.`,
+      400,
+    );
+  }
+
+  return note;
+}
+
+function readToday(value: unknown) {
+  if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return value;
+  }
+
+  return undefined;
 }
 
 function readModelId(value: unknown) {

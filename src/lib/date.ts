@@ -27,6 +27,7 @@ export function formatDateLabel(isoDate: string | null) {
   const date = startOfDay(new Date(`${isoDate}T00:00:00`));
   const diff = Math.round((date.getTime() - today.getTime()) / 86_400_000);
 
+  if (diff === -1) return "Gestern";
   if (diff === 0) return "Heute";
   if (diff === 1) return "Morgen";
 
@@ -36,12 +37,13 @@ export function formatDateLabel(isoDate: string | null) {
   ).padStart(2, "0")}.`;
 }
 
+export function isOverdue(isoDate: string | null) {
+  if (!isoDate) return false;
+  return isoDate < toIsoDate(new Date());
+}
+
 export function startOfDay(date: Date) {
   const copy = new Date(date);
   copy.setHours(0, 0, 0, 0);
   return copy;
-}
-
-export function fixedToday() {
-  return new Date("2026-06-24T12:00:00");
 }

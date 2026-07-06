@@ -13,6 +13,8 @@ export type AiModelId = (typeof AI_MODEL_OPTIONS)[number]["id"];
 
 export const DEFAULT_AI_MODEL_ID: AiModelId = "openai-gpt-5-5";
 
+export const MAX_NOTE_LENGTH = 4000;
+
 export function isAiModelId(value: string): value is AiModelId {
   return AI_MODEL_OPTIONS.some((option) => option.id === value);
 }

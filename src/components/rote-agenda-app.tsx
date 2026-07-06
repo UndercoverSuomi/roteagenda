@@ -1,6 +1,7 @@
 "use client";
 
 import Image from "next/image";
+import Link from "next/link";
 import {
   ArrowLeft,
   Bell,
@@ -26,17 +27,22 @@ import { ID, type Models } from "appwrite";
 import { useEffect, useMemo, useState } from "react";
 import { account, client } from "@/lib/appwrite";
 import { processRawNoteWithConfiguredAi } from "@/lib/ai-client";
-import { AI_MODEL_OPTIONS, type AiModelId } from "@/lib/ai-models";
+import { AI_MODEL_OPTIONS, MAX_NOTE_LENGTH, type AiModelId } from "@/lib/ai-models";
+import { createEmptyAppData } from "@/lib/app-data";
 import {
+  deleteAllUserData,
+  deleteItem,
   loadAppDataForUser,
-  saveAppData,
+  saveSettings,
+  upsertItem,
 } from "@/lib/appwrite-store";
-import { formatDateLabel, toIsoDate } from "@/lib/date";
-import { createInitialData } from "@/lib/mock-data";
+import { formatDateLabel, isOverdue, toIsoDate } from "@/lib/date";
+import { createSyncQueue, type SyncStatus } from "@/lib/sync-queue";
 import type {
   AiSuggestion,
   AppData,
   Project,
+  RawNote,
   Task,
   TaskPriority,
   TaskStatus,
@@ -46,7 +52,7 @@ type Screen = "welcome" | "today" | "capture" | "inbox" | "projects" | "project"
 type TaskFilter = "all" | "today" | "planned" | "later";
 type ProjectDetailTab = "tasks" | "details" | "notes";
 type TaskDetailTab = "details" | "raw" | "ai";
-type AuthMode = "login" | "register";
+type AuthMode = "login" | "register" | "recover";
 type AuthStatus = "loading" | "signedOut" | "signedIn";
 type DataStatus = "idle" | "loading" | "ready" | "error";
 
@@ -67,27 +73,39 @@ function cx(...classes: Array<string | false | null | undefined>) {
 }
 
 export function RoteAgendaApp() {
-  const [data, setData] = useState<AppData>(() => createInitialData());
+  const [data, setData] = useState<AppData>(() => createEmptyAppData());
   const [authUser, setAuthUser] = useState<Models.User<Models.Preferences> | null>(null);
   const [authStatus, setAuthStatus] = useState<AuthStatus>("loading");
   const [authMode, setAuthMode] = useState<AuthMode>("login");
   const [isAuthSubmitting, setIsAuthSubmitting] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
+  const [authNotice, setAuthNotice] = useState<string | null>(null);
   const [dataStatus, setDataStatus] = useState<DataStatus>("idle");
   const [dataError, setDataError] = useState<string | null>(null);
-  const [isSaving, setIsSaving] = useState(false);
+  const [syncStatus, setSyncStatus] = useState<SyncStatus>("idle");
+  const [syncError, setSyncError] = useState<string | null>(null);
   const [screen, setScreen] = useState<Screen>("welcome");
   const [taskFilter, setTaskFilter] = useState<TaskFilter>("all");
   const [projectTab, setProjectTab] = useState<ProjectDetailTab>("tasks");
   const [taskDetailTab, setTaskDetailTab] = useState<TaskDetailTab>("details");
-  const [selectedProjectId, setSelectedProjectId] = useState("project-marketing");
-  const [selectedTaskId, setSelectedTaskId] = useState("task-angebot");
+  const [selectedProjectId, setSelectedProjectId] = useState("");
+  const [selectedTaskId, setSelectedTaskId] = useState("");
   const [captureText, setCaptureText] = useState("");
   const [activeSuggestions, setActiveSuggestions] = useState<AiSuggestion[]>([]);
   const [captureError, setCaptureError] = useState<string | null>(null);
   const [isProcessingNote, setIsProcessingNote] = useState(false);
   const [editingTask, setEditingTask] = useState<Task | null>(null);
+  const [editingProject, setEditingProject] = useState<Project | null>(null);
   const [editingSuggestionId, setEditingSuggestionId] = useState<string | null>(null);
+
+  const syncQueue = useMemo(
+    () =>
+      createSyncQueue((status, error) => {
+        setSyncStatus(status);
+        setSyncError(error);
+      }),
+    [],
+  );
 
   useEffect(() => {
     let isActive = true;
@@ -117,24 +135,6 @@ export function RoteAgendaApp() {
     };
   }, []);
 
-  useEffect(() => {
-    if (authStatus !== "signedIn" || dataStatus !== "ready") {
-      return;
-    }
-
-    const timer = window.setTimeout(() => {
-      setIsSaving(true);
-      void saveAppData(data)
-        .then(() => setDataError(null))
-        .catch((error) => {
-          setDataError(readErrorMessage(error));
-        })
-        .finally(() => setIsSaving(false));
-    }, 500);
-
-    return () => window.clearTimeout(timer);
-  }, [authStatus, data, dataStatus]);
-
   async function loadRemoteData(user: Models.User<Models.Preferences>) {
     try {
       const remoteData = await loadAppDataForUser(user);
@@ -146,6 +146,15 @@ export function RoteAgendaApp() {
       setDataStatus("error");
     }
   }
+
+  // Jede Änderung wird sofort optimistisch angezeigt und in der Queue
+  // nacheinander nach Appwrite geschrieben.
+  function persist(label: string, job: () => Promise<void>) {
+    if (dataStatus !== "ready") return;
+    syncQueue.push(label, job);
+  }
+
+  const userId = authUser?.$id ?? "";
 
   const selectedProject =
     data.projects.find((project) => project.id === selectedProjectId) ??
@@ -165,7 +174,8 @@ export function RoteAgendaApp() {
     const today = toIsoDate(new Date());
     return data.tasks
       .filter((task) => {
-        if (taskFilter === "today") return task.dueDate === today;
+        // "Heute" zeigt auch Überfälliges, damit nichts unsichtbar liegen bleibt.
+        if (taskFilter === "today") return Boolean(task.dueDate && task.dueDate <= today);
         if (taskFilter === "planned") return Boolean(task.dueDate && task.dueDate > today);
         if (taskFilter === "later") return !task.dueDate;
         return true;
@@ -217,6 +227,10 @@ export function RoteAgendaApp() {
       }));
       setActiveSuggestions(result.suggestions);
       setCaptureText("");
+      persist("Rohnotiz", () => upsertItem("rawNotes", result.rawNote, userId));
+      for (const suggestion of result.suggestions) {
+        persist("KI-Vorschlag", () => upsertItem("suggestions", suggestion, userId));
+      }
     } catch (error) {
       setCaptureError(readErrorMessage(error));
     } finally {
@@ -234,6 +248,7 @@ export function RoteAgendaApp() {
         suggestion.id === updated.id ? updated : suggestion,
       ),
     }));
+    persist("KI-Vorschlag", () => upsertItem("suggestions", updated, userId));
   }
 
   function acceptSuggestion(suggestion: AiSuggestion, createdBy: "ai" | "user" = "ai") {
@@ -293,39 +308,46 @@ export function RoteAgendaApp() {
     setSelectedTaskId(task.id);
     setSelectedProjectId(projectId);
     setScreen("today");
+
+    if (newProject) {
+      const projectToSave = newProject;
+      persist("Neues Projekt", () => upsertItem("projects", projectToSave, userId));
+    }
+    persist("Aufgabe", () => upsertItem("tasks", task, userId));
+    persist("KI-Vorschlag", () => upsertItem("suggestions", acceptedSuggestion, userId));
   }
 
   function rejectSuggestion(suggestionId: string) {
+    const target = data.suggestions.find((suggestion) => suggestion.id === suggestionId);
+    if (!target) return;
+
+    const rejected = { ...target, state: "rejected" as const };
     setData((current) => ({
       ...current,
       suggestions: current.suggestions.map((suggestion) =>
-        suggestion.id === suggestionId
-          ? { ...suggestion, state: "rejected" as const }
-          : suggestion,
+        suggestion.id === suggestionId ? rejected : suggestion,
       ),
     }));
     setActiveSuggestions((current) =>
-      current.map((suggestion) =>
-        suggestion.id === suggestionId
-          ? { ...suggestion, state: "rejected" as const }
-          : suggestion,
-      ),
+      current.map((suggestion) => (suggestion.id === suggestionId ? rejected : suggestion)),
     );
+    persist("KI-Vorschlag", () => upsertItem("suggestions", rejected, userId));
   }
 
   function toggleTask(taskId: string) {
+    const target = data.tasks.find((task) => task.id === taskId);
+    if (!target) return;
+
+    const updated: Task = {
+      ...target,
+      status: target.status === "done" ? "open" : "done",
+      updatedAt: new Date().toISOString(),
+    };
     setData((current) => ({
       ...current,
-      tasks: current.tasks.map((task) =>
-        task.id === taskId
-          ? {
-              ...task,
-              status: task.status === "done" ? "open" : "done",
-              updatedAt: new Date().toISOString(),
-            }
-          : task,
-      ),
+      tasks: current.tasks.map((task) => (task.id === taskId ? updated : task)),
     }));
+    persist("Aufgabe", () => upsertItem("tasks", updated, userId));
   }
 
   function saveTask(task: Task) {
@@ -341,6 +363,7 @@ export function RoteAgendaApp() {
     setSelectedTaskId(task.id);
     setSelectedProjectId(task.projectId);
     setEditingTask(null);
+    persist("Aufgabe", () => upsertItem("tasks", task, userId));
   }
 
   function deleteTask(taskId: string) {
@@ -350,20 +373,81 @@ export function RoteAgendaApp() {
     }));
     setEditingTask(null);
     setScreen("today");
+    persist("Aufgabe löschen", () => deleteItem("tasks", taskId));
   }
 
   function toggleProjectAi(projectId: string) {
+    const target = data.projects.find((project) => project.id === projectId);
+    if (!target) return;
+
+    const updated: Project = {
+      ...target,
+      aiEnabled: !target.aiEnabled,
+      updatedAt: new Date().toISOString(),
+    };
     setData((current) => ({
       ...current,
       projects: current.projects.map((project) =>
-        project.id === projectId
-          ? { ...project, aiEnabled: !project.aiEnabled, updatedAt: new Date().toISOString() }
-          : project,
+        project.id === projectId ? updated : project,
       ),
     }));
+    persist("Projekt", () => upsertItem("projects", updated, userId));
   }
 
-  function createBlankTask(projectId = selectedProject?.id ?? data.projects[0].id) {
+  function saveProject(project: Project) {
+    setData((current) => {
+      const exists = current.projects.some((item) => item.id === project.id);
+      return {
+        ...current,
+        projects: exists
+          ? current.projects.map((item) => (item.id === project.id ? project : item))
+          : [project, ...current.projects],
+      };
+    });
+    setSelectedProjectId(project.id);
+    setEditingProject(null);
+    persist("Projekt", () => upsertItem("projects", project, userId));
+  }
+
+  function deleteProject(projectId: string) {
+    const taskIdsToDelete = data.tasks
+      .filter((task) => task.projectId === projectId)
+      .map((task) => task.id);
+
+    setData((current) => ({
+      ...current,
+      projects: current.projects.filter((project) => project.id !== projectId),
+      tasks: current.tasks.filter((task) => task.projectId !== projectId),
+    }));
+    if (selectedProjectId === projectId) {
+      setSelectedProjectId("");
+    }
+    setEditingProject(null);
+    setScreen("projects");
+
+    for (const taskId of taskIdsToDelete) {
+      persist("Aufgabe löschen", () => deleteItem("tasks", taskId));
+    }
+    persist("Projekt löschen", () => deleteItem("projects", projectId));
+  }
+
+  function createBlankProject() {
+    const now = new Date().toISOString();
+    setEditingProject({
+      id: `project-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
+      title: "",
+      description: "",
+      keywords: [],
+      progress: 0,
+      aiEnabled: true,
+      createdAt: now,
+      updatedAt: now,
+    });
+  }
+
+  function createBlankTask(projectId = selectedProject?.id ?? data.projects[0]?.id) {
+    if (!projectId) return;
+
     const now = new Date().toISOString();
     setEditingTask({
       id: `task-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
@@ -390,9 +474,21 @@ export function RoteAgendaApp() {
     name: string;
   }) {
     setAuthError(null);
+    setAuthNotice(null);
     setIsAuthSubmitting(true);
 
     try {
+      if (authMode === "recover") {
+        await account.createRecovery({
+          email,
+          url: `${window.location.origin}/reset-password`,
+        });
+        setAuthNotice(
+          "E-Mail verschickt. Öffne den Link aus der Nachricht, um ein neues Passwort zu setzen.",
+        );
+        return;
+      }
+
       if (authMode === "register") {
         await account.create({
           userId: ID.unique(),
@@ -426,29 +522,33 @@ export function RoteAgendaApp() {
     setAuthUser(null);
     setAuthStatus("signedOut");
     setDataStatus("idle");
-    setData(createInitialData());
+    setData(createEmptyAppData());
     setActiveSuggestions([]);
+    setSelectedProjectId("");
+    setSelectedTaskId("");
     setScreen("welcome");
   }
 
-  function handleResetData() {
+  function handleDeleteAllData() {
     setData((current) => ({
-      ...createInitialData(),
+      ...createEmptyAppData(),
       user: current.user,
       settings: current.settings,
     }));
     setActiveSuggestions([]);
+    setSelectedProjectId("");
+    setSelectedTaskId("");
     setScreen("today");
+    persist("Alle Daten löschen", () => deleteAllUserData());
   }
 
   function handleAiModelChange(aiModel: AiModelId) {
+    const settings = { ...data.settings, aiModel };
     setData((current) => ({
       ...current,
-      settings: {
-        ...current.settings,
-        aiModel,
-      },
+      settings,
     }));
+    persist("Einstellungen", () => saveSettings(settings));
   }
 
   if (authStatus === "loading") {
@@ -460,8 +560,13 @@ export function RoteAgendaApp() {
       <AuthScreen
         mode={authMode}
         error={authError}
+        notice={authNotice}
         isSubmitting={isAuthSubmitting}
-        onModeChange={setAuthMode}
+        onModeChange={(mode) => {
+          setAuthMode(mode);
+          setAuthError(null);
+          setAuthNotice(null);
+        }}
         onSubmit={handleAuthSubmit}
       />
     );
@@ -529,7 +634,7 @@ export function RoteAgendaApp() {
           projects={data.projects}
           tasks={data.tasks}
           onOpenProject={openProject}
-          onOpenMore={() => navigate("more")}
+          onCreateProject={createBlankProject}
         />
       );
     }
@@ -539,6 +644,7 @@ export function RoteAgendaApp() {
         <ProjectDetailScreen
           project={selectedProject}
           tasks={data.tasks.filter((task) => task.projectId === selectedProject.id)}
+          notes={collectProjectNotes(data, selectedProject.id)}
           tab={projectTab}
           onBack={() => navigate("projects")}
           onTabChange={setProjectTab}
@@ -546,7 +652,7 @@ export function RoteAgendaApp() {
           onToggleTask={toggleTask}
           onAddTask={() => createBlankTask(selectedProject.id)}
           onToggleAi={() => toggleProjectAi(selectedProject.id)}
-          onOpenMore={() => navigate("more")}
+          onEdit={() => setEditingProject(selectedProject)}
         />
       );
     }
@@ -576,10 +682,9 @@ export function RoteAgendaApp() {
           userName={authUser?.name || data.user.name}
           userEmail={authUser?.email || data.user.email}
           aiModel={data.settings.aiModel}
-          isSaving={isSaving}
-          dataError={dataError}
+          syncStatus={syncStatus}
           onAiModelChange={handleAiModelChange}
-          onReset={handleResetData}
+          onDeleteAll={handleDeleteAllData}
           onLogout={handleLogout}
         />
       );
@@ -590,7 +695,7 @@ export function RoteAgendaApp() {
         tasks={visibleTasks}
         projects={projectById}
         filter={taskFilter}
-        pendingCount={pendingSuggestions.length}
+        aiStats={buildAiStats(data)}
         onFilterChange={setTaskFilter}
         onOpenTask={openTask}
         onToggleTask={toggleTask}
@@ -620,6 +725,18 @@ export function RoteAgendaApp() {
         ) : null}
 
         <WorkSurface hasBottomNav={screen !== "welcome"}>
+          {syncError ? (
+            <div className="mx-6 mt-4 flex items-start justify-between gap-3 rounded-[6px] border border-[var(--red)] bg-white/80 p-3 md:mx-8">
+              <p className="text-[12px] leading-5 text-[var(--red)]">{syncError}</p>
+              <button
+                type="button"
+                onClick={() => syncQueue.retry()}
+                className="shrink-0 rounded-[4px] bg-[var(--red)] px-3 py-1.5 text-[11px] font-bold text-white"
+              >
+                Erneut versuchen
+              </button>
+            </div>
+          ) : null}
           {screenContent}
           {screen !== "welcome" ? (
             <BottomNav
@@ -649,8 +766,49 @@ export function RoteAgendaApp() {
           onSave={saveTask}
         />
       ) : null}
+
+      {editingProject ? (
+        <ProjectEditor
+          project={editingProject}
+          isNew={!data.projects.some((project) => project.id === editingProject.id)}
+          taskCount={data.tasks.filter((task) => task.projectId === editingProject.id).length}
+          onClose={() => setEditingProject(null)}
+          onDelete={deleteProject}
+          onSave={saveProject}
+        />
+      ) : null}
     </main>
   );
+}
+
+function collectProjectNotes(data: AppData, projectId: string): RawNote[] {
+  const noteIds = new Set(
+    data.tasks
+      .filter((task) => task.projectId === projectId && task.sourceNoteId)
+      .map((task) => task.sourceNoteId),
+  );
+
+  for (const suggestion of data.suggestions) {
+    if (suggestion.suggestedProjectId === projectId) {
+      noteIds.add(suggestion.rawNoteId);
+    }
+  }
+
+  return data.rawNotes.filter((note) => noteIds.has(note.id));
+}
+
+type AiStats = {
+  processedNotes: number;
+  acceptedCount: number;
+  pendingCount: number;
+};
+
+function buildAiStats(data: AppData): AiStats {
+  return {
+    processedNotes: data.rawNotes.filter((note) => note.processed).length,
+    acceptedCount: data.suggestions.filter((item) => item.state === "accepted").length,
+    pendingCount: data.suggestions.filter((item) => item.state === "pending").length,
+  };
 }
 
 function WorkSurface({
@@ -710,12 +868,14 @@ function AppShellMessage({
 function AuthScreen({
   mode,
   error,
+  notice,
   isSubmitting,
   onModeChange,
   onSubmit,
 }: {
   mode: AuthMode;
   error: string | null;
+  notice: string | null;
   isSubmitting: boolean;
   onModeChange: (mode: AuthMode) => void;
   onSubmit: (credentials: { email: string; password: string; name: string }) => void;
@@ -724,6 +884,18 @@ function AuthScreen({
   const [password, setPassword] = useState("");
   const [name, setName] = useState("");
   const isRegister = mode === "register";
+  const isRecover = mode === "recover";
+
+  const title = isRecover
+    ? "Passwort zurücksetzen"
+    : isRegister
+      ? "Account erstellen"
+      : "Anmelden";
+  const submitLabel = isRecover
+    ? "Link anfordern"
+    : isRegister
+      ? "Registrieren"
+      : "Anmelden";
 
   return (
     <main className="grid min-h-screen place-items-center bg-[var(--paper)] px-6 text-[var(--ink)]">
@@ -731,9 +903,12 @@ function AuthScreen({
         <p className="text-[11px] font-extrabold uppercase tracking-[0.05em] text-[var(--red)]">
           Rote Agenda
         </p>
-        <h1 className="mt-3 font-display text-[34px] font-bold">
-          {isRegister ? "Account erstellen" : "Anmelden"}
-        </h1>
+        <h1 className="mt-3 font-display text-[34px] font-bold">{title}</h1>
+        {isRecover ? (
+          <p className="mt-3 text-[13px] leading-6 text-[var(--muted)]">
+            Wir schicken dir einen Link, mit dem du ein neues Passwort setzen kannst.
+          </p>
+        ) : null}
         <form
           className="mt-7 space-y-4"
           onSubmit={(event) => {
@@ -759,19 +934,26 @@ function AuthScreen({
               required
             />
           </Field>
-          <Field label="Passwort">
-            <input
-              type="password"
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-              className="h-11 w-full rounded-[5px] border border-[var(--line)] bg-white px-3 text-[13px] outline-none"
-              minLength={8}
-              required
-            />
-          </Field>
+          {!isRecover ? (
+            <Field label="Passwort">
+              <input
+                type="password"
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                className="h-11 w-full rounded-[5px] border border-[var(--line)] bg-white px-3 text-[13px] outline-none"
+                minLength={8}
+                required
+              />
+            </Field>
+          ) : null}
           {error ? (
             <p className="rounded-[5px] border border-[var(--red)] bg-white/70 p-3 text-[12px] leading-5 text-[var(--red)]">
               {error}
+            </p>
+          ) : null}
+          {notice ? (
+            <p className="rounded-[5px] border border-[var(--line-strong)] bg-white/70 p-3 text-[12px] leading-5 text-[var(--ink-soft)]">
+              {notice}
             </p>
           ) : null}
           <button
@@ -779,18 +961,53 @@ function AuthScreen({
             disabled={isSubmitting}
             className="flex h-12 w-full items-center justify-center rounded-[5px] bg-[var(--red)] px-4 text-[13px] font-bold text-white disabled:opacity-50"
           >
-            {isSubmitting ? "Bitte warten..." : isRegister ? "Registrieren" : "Anmelden"}
+            {isSubmitting ? "Bitte warten..." : submitLabel}
           </button>
         </form>
-        <button
-          type="button"
-          onClick={() => onModeChange(isRegister ? "login" : "register")}
-          className="mt-5 text-[12px] font-bold underline underline-offset-2"
-        >
-          {isRegister ? "Schon registriert? Anmelden" : "Noch kein Account? Registrieren"}
-        </button>
+        <div className="mt-5 flex flex-col items-start gap-2">
+          {mode === "login" ? (
+            <>
+              <button
+                type="button"
+                onClick={() => onModeChange("register")}
+                className="text-[12px] font-bold underline underline-offset-2"
+              >
+                Noch kein Account? Registrieren
+              </button>
+              <button
+                type="button"
+                onClick={() => onModeChange("recover")}
+                className="text-[12px] font-bold underline underline-offset-2"
+              >
+                Passwort vergessen?
+              </button>
+            </>
+          ) : (
+            <button
+              type="button"
+              onClick={() => onModeChange("login")}
+              className="text-[12px] font-bold underline underline-offset-2"
+            >
+              {isRegister ? "Schon registriert? Anmelden" : "Zurück zur Anmeldung"}
+            </button>
+          )}
+        </div>
+        <LegalLinks className="mt-6" />
       </section>
     </main>
+  );
+}
+
+function LegalLinks({ className }: { className?: string }) {
+  return (
+    <p className={cx("flex gap-4 text-[11px] text-[var(--muted)]", className)}>
+      <Link href="/impressum" className="underline underline-offset-2">
+        Impressum
+      </Link>
+      <Link href="/datenschutz" className="underline underline-offset-2">
+        Datenschutz
+      </Link>
+    </p>
   );
 }
 
@@ -827,7 +1044,7 @@ function WelcomeScreen({ onStart }: { onStart: () => void }) {
           </p>
         </div>
 
-        <div className="mt-auto space-y-8 md:max-w-sm">
+        <div className="mt-auto space-y-6 md:max-w-sm">
           <button
             type="button"
             onClick={onStart}
@@ -836,13 +1053,7 @@ function WelcomeScreen({ onStart }: { onStart: () => void }) {
             <span>Los geht&apos;s</span>
             <ChevronRight className="h-5 w-5" />
           </button>
-          <button
-            type="button"
-            onClick={onStart}
-            className="mx-auto block text-[13px] font-bold text-[var(--cream)] underline underline-offset-2 md:text-[var(--ink)]"
-          >
-            Anmelden
-          </button>
+          <LegalLinks className="justify-center text-[var(--cream)] md:justify-start md:text-[var(--muted)]" />
         </div>
       </div>
     </div>
@@ -853,7 +1064,7 @@ function TodayScreen({
   tasks,
   projects,
   filter,
-  pendingCount,
+  aiStats,
   onFilterChange,
   onOpenTask,
   onToggleTask,
@@ -864,7 +1075,7 @@ function TodayScreen({
   tasks: Task[];
   projects: Map<string, Project>;
   filter: TaskFilter;
-  pendingCount: number;
+  aiStats: AiStats;
   onFilterChange: (filter: TaskFilter) => void;
   onOpenTask: (taskId: string) => void;
   onToggleTask: (taskId: string) => void;
@@ -872,6 +1083,8 @@ function TodayScreen({
   onOpenInbox: () => void;
   onOpenMore: () => void;
 }) {
+  const isBrandNew = !tasks.length && !aiStats.processedNotes && filter === "all";
+
   return (
     <div className="flex flex-1 flex-col px-6 pt-3 md:px-8 md:pt-8 lg:px-10">
       <ScreenHeader
@@ -895,25 +1108,29 @@ function TodayScreen({
         </span>
       </button>
 
-      <button
-        type="button"
-        onClick={onOpenInbox}
-        className="mt-5 w-full rounded-[5px] border border-[var(--line)] bg-white/50 p-4 text-left shadow-sm transition hover:bg-white/70"
-      >
-        <div className="flex items-center justify-between gap-4">
-          <div className="flex items-center gap-2 text-[11px] font-extrabold uppercase tracking-[0.03em]">
-            <Sparkles className="h-4 w-4 text-[var(--green)]" />
-            KI-Update
+      {aiStats.processedNotes ? (
+        <button
+          type="button"
+          onClick={onOpenInbox}
+          className="mt-5 w-full rounded-[5px] border border-[var(--line)] bg-white/50 p-4 text-left shadow-sm transition hover:bg-white/70"
+        >
+          <div className="flex items-center justify-between gap-4">
+            <div className="flex items-center gap-2 text-[11px] font-extrabold uppercase tracking-[0.03em]">
+              <Sparkles className="h-4 w-4 text-[var(--green)]" />
+              KI-Update
+            </div>
+            <ChevronRight className="h-5 w-5" />
           </div>
-          <ChevronRight className="h-5 w-5" />
-        </div>
-        <p className="mt-4 text-[13px] font-bold">8 neue Einträge verarbeitet</p>
-        <div className="mt-4 grid grid-cols-3 gap-2 text-[11px] font-semibold">
-          <span>6 zugeordnet</span>
-          <span>1 erstellt</span>
-          <span>{pendingCount || 1} benötigt Hilfe</span>
-        </div>
-      </button>
+          <p className="mt-4 text-[13px] font-bold">
+            {aiStats.processedNotes}{" "}
+            {aiStats.processedNotes === 1 ? "Notiz" : "Notizen"} verarbeitet
+          </p>
+          <div className="mt-4 grid grid-cols-2 gap-2 text-[11px] font-semibold">
+            <span>{aiStats.acceptedCount} übernommen</span>
+            <span>{aiStats.pendingCount} zu prüfen</span>
+          </div>
+        </button>
+      ) : null}
 
       <div className="mt-9 flex items-end justify-between">
         <h2 className="font-display text-[20px] font-bold">Meine Aufgaben</h2>
@@ -939,6 +1156,22 @@ function TodayScreen({
               onToggle={() => onToggleTask(task.id)}
             />
           ))
+        ) : isBrandNew ? (
+          <div className="mt-6 rounded-[7px] border border-dashed border-[var(--line-strong)] p-5">
+            <p className="font-display text-[18px] font-bold">Willkommen bei Rote Agenda</p>
+            <p className="mt-2 text-[13px] leading-6 text-[var(--muted)]">
+              Halte einfach fest, was dich beschäftigt. Die KI macht daraus
+              Aufgabenvorschläge, die du prüfst und übernimmst.
+            </p>
+            <button
+              type="button"
+              onClick={onCapture}
+              className="mt-4 flex items-center gap-2 rounded-[5px] bg-[var(--red)] px-4 py-3 text-[13px] font-bold text-white"
+            >
+              <Plus className="h-4 w-4" />
+              Erste Notiz erfassen
+            </button>
+          </div>
         ) : (
           <EmptyState
             title="Keine Aufgaben in dieser Ansicht"
@@ -995,6 +1228,7 @@ function CaptureScreen({
         <textarea
           value={captureText}
           onChange={(event) => onChangeText(event.target.value)}
+          maxLength={MAX_NOTE_LENGTH}
           placeholder="Schreib einfach alles rein – Gedanken, Aufgaben, Notizen, Gesprächsfetzen…"
           className="min-h-44 w-full resize-none bg-transparent text-[16px] leading-7 outline-none placeholder:text-[var(--muted)]"
         />
@@ -1108,22 +1342,39 @@ function ProjectsScreen({
   projects,
   tasks,
   onOpenProject,
-  onOpenMore,
+  onCreateProject,
 }: {
   projects: Project[];
   tasks: Task[];
   onOpenProject: (projectId: string) => void;
-  onOpenMore: () => void;
+  onCreateProject: () => void;
 }) {
   return (
     <div className="flex flex-1 flex-col px-6 pt-3 md:px-8 md:pt-8 lg:px-10">
       <ScreenHeader
         title="Projekte"
         leftIcon={<FolderKanban className="h-5 w-5" />}
-        rightIcon={<MoreHorizontal className="h-5 w-5" />}
-        rightLabel="Mehr öffnen"
-        onRight={onOpenMore}
+        rightIcon={<Plus className="h-5 w-5" />}
+        rightLabel="Neues Projekt anlegen"
+        onRight={onCreateProject}
       />
+      {!projects.length ? (
+        <div className="mt-6 rounded-[7px] border border-dashed border-[var(--line-strong)] p-5">
+          <p className="font-display text-[18px] font-bold">Noch keine Projekte</p>
+          <p className="mt-2 text-[13px] leading-6 text-[var(--muted)]">
+            Projekte bündeln deine Aufgaben. Die KI schlägt bei neuen Notizen
+            automatisch passende Projekte vor – oder du legst selbst eins an.
+          </p>
+          <button
+            type="button"
+            onClick={onCreateProject}
+            className="mt-4 flex items-center gap-2 rounded-[5px] bg-[var(--red)] px-4 py-3 text-[13px] font-bold text-white"
+          >
+            <Plus className="h-4 w-4" />
+            Projekt anlegen
+          </button>
+        </div>
+      ) : null}
       <div className="mt-6 grid gap-4 lg:grid-cols-2">
         {projects.map((project) => {
           const projectTasks = tasks.filter((task) => task.projectId === project.id);
@@ -1168,6 +1419,7 @@ function ProjectsScreen({
 function ProjectDetailScreen({
   project,
   tasks,
+  notes,
   tab,
   onBack,
   onTabChange,
@@ -1175,10 +1427,11 @@ function ProjectDetailScreen({
   onToggleTask,
   onAddTask,
   onToggleAi,
-  onOpenMore,
+  onEdit,
 }: {
   project: Project;
   tasks: Task[];
+  notes: RawNote[];
   tab: ProjectDetailTab;
   onBack: () => void;
   onTabChange: (tab: ProjectDetailTab) => void;
@@ -1186,7 +1439,7 @@ function ProjectDetailScreen({
   onToggleTask: (taskId: string) => void;
   onAddTask: () => void;
   onToggleAi: () => void;
-  onOpenMore: () => void;
+  onEdit: () => void;
 }) {
   const progress = projectProgress(project, tasks);
 
@@ -1196,11 +1449,11 @@ function ProjectDetailScreen({
         <ScreenHeader
           title=""
           leftIcon={<ArrowLeft className="h-5 w-5" />}
-          rightIcon={<MoreHorizontal className="h-5 w-5" />}
+          rightIcon={<Edit3 className="h-5 w-5" />}
           leftLabel="Zurück"
-          rightLabel="Mehr öffnen"
+          rightLabel="Projekt bearbeiten"
           onLeft={onBack}
-          onRight={onOpenMore}
+          onRight={onEdit}
         />
         <p className="mt-8 text-[11px] font-extrabold uppercase tracking-[0.05em] text-[var(--red)]">
           Projekt
@@ -1293,10 +1546,28 @@ function ProjectDetailScreen({
         ) : null}
 
         {tab === "notes" ? (
-          <div className="pt-5 text-[14px] leading-7 text-[var(--muted)]">
-            Noch keine Projektnotizen. Rohnotizen aus Capture können später hier
-            gesammelt werden.
-          </div>
+          notes.length ? (
+            <div className="space-y-3 pt-5">
+              {notes.map((note) => (
+                <div
+                  key={note.id}
+                  className="rounded-[6px] border border-[var(--line)] bg-white/45 p-4"
+                >
+                  <p className="text-[13px] leading-6 text-[var(--ink-soft)]">
+                    {note.content}
+                  </p>
+                  <p className="mt-2 text-[11px] font-semibold uppercase tracking-[0.04em] text-[var(--muted)]">
+                    Rohnotiz · {formatDateLabel(note.createdAt.slice(0, 10))}
+                  </p>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="pt-5 text-[14px] leading-7 text-[var(--muted)]">
+              Noch keine Rohnotizen zu diesem Projekt. Sobald die KI Notizen
+              hierher zuordnet, erscheinen sie in dieser Liste.
+            </div>
+          )
         ) : null}
       </div>
     </div>
@@ -1418,28 +1689,35 @@ function MoreScreen({
   userName,
   userEmail,
   aiModel,
-  isSaving,
-  dataError,
+  syncStatus,
   onAiModelChange,
-  onReset,
+  onDeleteAll,
   onLogout,
 }: {
   userName: string;
   userEmail: string;
   aiModel: AiModelId;
-  isSaving: boolean;
-  dataError: string | null;
+  syncStatus: SyncStatus;
   onAiModelChange: (model: AiModelId) => void;
-  onReset: () => void;
+  onDeleteAll: () => void;
   onLogout: () => void;
 }) {
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+
+  const syncLabel =
+    syncStatus === "saving"
+      ? "Appwrite speichert..."
+      : syncStatus === "error"
+        ? "Fehler beim Speichern"
+        : "Alles gespeichert";
+
   return (
     <div className="flex flex-1 flex-col px-6 pt-3 md:px-8 md:pt-8 lg:px-10">
       <ScreenHeader title="Mehr" leftIcon={<MoreHorizontal className="h-5 w-5" />} />
       <div className="mt-8 space-y-3">
         <InfoTile label="Produkt" value="Rote Agenda Webtool" />
         <InfoTile label="Account" value={userName || userEmail} />
-        <InfoTile label="Speicherung" value={isSaving ? "Appwrite speichert..." : "Appwrite Cloud"} />
+        <InfoTile label="Speicherung" value={syncLabel} />
         <section className="rounded-[6px] border border-[var(--line)] bg-white/45 p-4">
           <label className="block">
             <span className="mb-2 block text-[11px] font-bold uppercase tracking-[0.04em] text-[var(--muted)]">
@@ -1458,19 +1736,44 @@ function MoreScreen({
             </select>
           </label>
         </section>
-        {dataError ? (
-          <p className="rounded-[5px] border border-[var(--red)] bg-white/70 p-3 text-[12px] leading-5 text-[var(--red)]">
-            {dataError}
-          </p>
-        ) : null}
-        <button
-          type="button"
-          onClick={onReset}
-          className="flex w-full items-center justify-between rounded-[6px] border border-[var(--line)] bg-white/45 p-4 text-[13px] font-bold text-[var(--red)]"
-        >
-          Demo-Daten zurücksetzen
-          <Trash2 className="h-4 w-4" />
-        </button>
+        {confirmingDelete ? (
+          <div className="rounded-[6px] border border-[var(--red)] bg-white/70 p-4">
+            <p className="text-[13px] font-bold text-[var(--red)]">
+              Wirklich alle Projekte, Aufgaben, Notizen und Vorschläge löschen?
+            </p>
+            <p className="mt-1 text-[12px] leading-5 text-[var(--muted)]">
+              Das kann nicht rückgängig gemacht werden. Dein Account bleibt bestehen.
+            </p>
+            <div className="mt-3 flex gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setConfirmingDelete(false);
+                  onDeleteAll();
+                }}
+                className="flex-1 rounded-[5px] bg-[var(--red)] px-3 py-3 text-[12px] font-bold text-white"
+              >
+                Ja, alles löschen
+              </button>
+              <button
+                type="button"
+                onClick={() => setConfirmingDelete(false)}
+                className="flex-1 rounded-[5px] border border-[var(--line-strong)] px-3 py-3 text-[12px] font-bold"
+              >
+                Abbrechen
+              </button>
+            </div>
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setConfirmingDelete(true)}
+            className="flex w-full items-center justify-between rounded-[6px] border border-[var(--line)] bg-white/45 p-4 text-[13px] font-bold text-[var(--red)]"
+          >
+            Alle Daten löschen
+            <Trash2 className="h-4 w-4" />
+          </button>
+        )}
         <button
           type="button"
           onClick={onLogout}
@@ -1479,6 +1782,7 @@ function MoreScreen({
           Abmelden
           <X className="h-4 w-4" />
         </button>
+        <LegalLinks className="pt-2" />
       </div>
     </div>
   );
@@ -1643,7 +1947,15 @@ function TaskRow({
           {project?.title ?? "Ohne Projekt"}
         </p>
       </button>
-      <span className="shrink-0 text-[12px] text-[var(--ink-soft)]">
+      <span
+        className={cx(
+          "shrink-0 text-[12px]",
+          task.status !== "done" && isOverdue(task.dueDate)
+            ? "font-bold text-[var(--red)]"
+            : "text-[var(--ink-soft)]",
+        )}
+      >
+        {task.status !== "done" && isOverdue(task.dueDate) ? "Überfällig · " : ""}
         {formatDateLabel(task.dueDate)}
       </span>
     </div>
@@ -2025,6 +2337,144 @@ function TaskEditor({
             Löschen
           </button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+function ProjectEditor({
+  project,
+  isNew,
+  taskCount,
+  onClose,
+  onDelete,
+  onSave,
+}: {
+  project: Project;
+  isNew: boolean;
+  taskCount: number;
+  onClose: () => void;
+  onDelete: (projectId: string) => void;
+  onSave: (project: Project) => void;
+}) {
+  const [draft, setDraft] = useState(project);
+  const [keywordsText, setKeywordsText] = useState(project.keywords.join(", "));
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+
+  function parseKeywords(value: string) {
+    return Array.from(
+      new Set(
+        value
+          .split(",")
+          .map((keyword) => keyword.trim().toLowerCase())
+          .filter(Boolean),
+      ),
+    ).slice(0, 12);
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-end bg-black/35 p-0 md:place-items-center md:p-6">
+      <div className="w-full max-w-[430px] rounded-t-[18px] bg-[var(--paper-soft)] p-6 shadow-2xl md:rounded-[18px]">
+        <div className="flex items-center justify-between">
+          <h2 className="font-display text-[22px] font-bold">
+            {isNew ? "Projekt anlegen" : "Projekt bearbeiten"}
+          </h2>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Schließen"
+            className="grid h-9 w-9 place-items-center"
+          >
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+        <div className="mt-5 space-y-3">
+          <Field label="Titel">
+            <input
+              value={draft.title}
+              onChange={(event) => setDraft((current) => ({ ...current, title: event.target.value }))}
+              className="h-11 w-full rounded-[5px] border border-[var(--line)] bg-white px-3 text-[13px] outline-none"
+            />
+          </Field>
+          <Field label="Beschreibung">
+            <textarea
+              value={draft.description}
+              onChange={(event) =>
+                setDraft((current) => ({ ...current, description: event.target.value }))
+              }
+              className="min-h-20 w-full resize-none rounded-[5px] border border-[var(--line)] bg-white px-3 py-3 text-[13px] outline-none"
+            />
+          </Field>
+          <Field label="Keywords (durch Komma getrennt)">
+            <input
+              value={keywordsText}
+              onChange={(event) => setKeywordsText(event.target.value)}
+              placeholder="z. B. kunde, angebot, newsletter"
+              className="h-11 w-full rounded-[5px] border border-[var(--line)] bg-white px-3 text-[13px] outline-none"
+            />
+          </Field>
+          <label className="flex items-center justify-between rounded-[5px] border border-[var(--line)] bg-white px-3 py-3 text-[13px] font-bold">
+            KI darf Notizen diesem Projekt zuordnen
+            <input
+              type="checkbox"
+              checked={draft.aiEnabled}
+              onChange={(event) =>
+                setDraft((current) => ({ ...current, aiEnabled: event.target.checked }))
+              }
+              className="h-4 w-4 accent-[var(--red)]"
+            />
+          </label>
+        </div>
+        {confirmingDelete ? (
+          <div className="mt-5 rounded-[6px] border border-[var(--red)] bg-white/70 p-4">
+            <p className="text-[13px] font-bold text-[var(--red)]">
+              Projekt löschen{taskCount ? ` – inklusive ${taskCount} ${taskCount === 1 ? "Aufgabe" : "Aufgaben"}` : ""}?
+            </p>
+            <div className="mt-3 flex gap-2">
+              <button
+                type="button"
+                onClick={() => onDelete(draft.id)}
+                className="flex-1 rounded-[5px] bg-[var(--red)] px-3 py-3 text-[12px] font-bold text-white"
+              >
+                Ja, löschen
+              </button>
+              <button
+                type="button"
+                onClick={() => setConfirmingDelete(false)}
+                className="flex-1 rounded-[5px] border border-[var(--line-strong)] px-3 py-3 text-[12px] font-bold"
+              >
+                Abbrechen
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="mt-5 flex gap-2">
+            <button
+              type="button"
+              onClick={() =>
+                onSave({
+                  ...draft,
+                  title: draft.title.trim(),
+                  keywords: parseKeywords(keywordsText),
+                  updatedAt: new Date().toISOString(),
+                })
+              }
+              disabled={!draft.title.trim()}
+              className="flex-1 rounded-[5px] bg-[var(--red)] px-3 py-3 text-[13px] font-bold text-white disabled:opacity-50"
+            >
+              Speichern
+            </button>
+            {!isNew ? (
+              <button
+                type="button"
+                onClick={() => setConfirmingDelete(true)}
+                className="rounded-[5px] border border-[var(--line-strong)] px-3 py-3 text-[13px] font-bold text-[var(--red)]"
+              >
+                Löschen
+              </button>
+            ) : null}
+          </div>
+        )}
       </div>
     </div>
   );

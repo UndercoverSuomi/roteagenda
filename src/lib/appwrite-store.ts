@@ -3,16 +3,13 @@ import { account, databases } from "@/lib/appwrite";
 import {
   APPWRITE_COLLECTIONS,
   APPWRITE_DATABASE_ID,
-  getMissingAppwriteCollectionEnv,
 } from "@/lib/appwrite-config";
 import { DEFAULT_AI_MODEL_ID, isAiModelId } from "@/lib/ai-models";
-import { createInitialData } from "@/lib/mock-data";
 import type {
   AiSuggestion,
   AppData,
   Project,
   RawNote,
-  Tag,
   Task,
   User,
   UserSettings,
@@ -20,68 +17,129 @@ import type {
 
 type AppwriteUser = Models.User<Models.Preferences>;
 type DocumentWithId<T> = T & Models.Document;
-type SyncItem = { id: string };
 type CollectionKey = keyof typeof APPWRITE_COLLECTIONS;
 type AppwritePrefs = Partial<UserSettings>;
+type StoredItem = { id: string };
+
+const PAGE_SIZE = 100;
+// Sicherheitsgrenze gegen Endlosschleifen; weit über realistischen Datenmengen.
+const MAX_DOCUMENTS = 5000;
 
 export async function loadAppDataForUser(user: AppwriteUser): Promise<AppData> {
-  assertAppwriteStoreConfigured();
+  try {
+    const [settings, projects, tasks, rawNotes, suggestions] = await Promise.all([
+      readSettings(),
+      listAllDocuments<Project>("projects"),
+      listAllDocuments<Task>("tasks"),
+      listAllDocuments<RawNote>("rawNotes"),
+      listAllDocuments<AiSuggestion>("suggestions"),
+    ]);
 
-  const [prefs, projects, tasks, rawNotes, suggestions, tags] = await Promise.all([
-    readSettings(),
-    listCollection<Project>("projects"),
-    listCollection<Task>("tasks"),
-    listCollection<RawNote>("rawNotes"),
-    listCollection<AiSuggestion>("suggestions"),
-    listCollection<Tag>("tags"),
-  ]);
-
-  const appUser = toAppUser(user);
-  const hasRemoteData =
-    projects.length || tasks.length || rawNotes.length || suggestions.length || tags.length;
-
-  if (!hasRemoteData) {
-    const seeded = {
-      ...createInitialData(),
-      user: appUser,
-      settings: prefs,
+    return {
+      user: toAppUser(user),
+      settings,
+      projects,
+      tasks,
+      rawNotes,
+      suggestions,
     };
-    await saveAppData(seeded);
-    return seeded;
+  } catch (error) {
+    throw new Error(describeLoadError(error));
   }
-
-  return {
-    user: appUser,
-    settings: prefs,
-    projects,
-    tasks,
-    rawNotes,
-    suggestions,
-    tags,
-  };
 }
 
-export async function saveAppData(data: AppData) {
-  assertAppwriteStoreConfigured();
-
-  await Promise.all([
-    account.updatePrefs<AppwritePrefs>({ prefs: data.settings }),
-    syncCollection("projects", data.projects, data.user.id),
-    syncCollection("tasks", data.tasks, data.user.id),
-    syncCollection("rawNotes", data.rawNotes, data.user.id),
-    syncCollection("suggestions", data.suggestions, data.user.id),
-    syncCollection("tags", data.tags, data.user.id),
-  ]);
+export async function saveSettings(settings: UserSettings) {
+  await account.updatePrefs<AppwritePrefs>({ prefs: settings });
 }
 
-export function assertAppwriteStoreConfigured() {
-  const missing = getMissingAppwriteCollectionEnv();
+export async function upsertItem<T extends StoredItem>(
+  key: CollectionKey,
+  item: T,
+  userId: string,
+) {
+  await databases.upsertDocument({
+    databaseId: APPWRITE_DATABASE_ID,
+    collectionId: APPWRITE_COLLECTIONS[key],
+    documentId: item.id,
+    data: toAppwriteData(item),
+    permissions: userDocumentPermissions(userId),
+  });
+}
 
-  if (missing.length) {
-    throw new Error(
-      `Appwrite ist noch nicht vollständig konfiguriert. Fehlende Environment Variables: ${missing.join(", ")}`,
-    );
+export async function deleteItem(key: CollectionKey, id: string) {
+  try {
+    await databases.deleteDocument({
+      databaseId: APPWRITE_DATABASE_ID,
+      collectionId: APPWRITE_COLLECTIONS[key],
+      documentId: id,
+    });
+  } catch (error) {
+    if (isNotFound(error)) return;
+    throw error;
   }
+}
+
+export async function deleteAllUserData() {
+  const keys: CollectionKey[] = ["tasks", "suggestions", "rawNotes", "projects"];
+
+  for (const key of keys) {
+    const items = await listAllDocuments<StoredItem>(key);
+    for (const item of items) {
+      await deleteItem(key, item.id);
+    }
+  }
+}
+
+async function readSettings(): Promise<UserSettings> {
+  try {
+    const prefs = await account.getPrefs<AppwritePrefs>();
+    const aiModel =
+      typeof prefs.aiModel === "string" && isAiModelId(prefs.aiModel)
+        ? prefs.aiModel
+        : DEFAULT_AI_MODEL_ID;
+
+    return { aiModel };
+  } catch {
+    return { aiModel: DEFAULT_AI_MODEL_ID };
+  }
+}
+
+async function listAllDocuments<T>(key: CollectionKey): Promise<T[]> {
+  const collectionId = APPWRITE_COLLECTIONS[key];
+  const documents: DocumentWithId<T>[] = [];
+  let cursor: string | null = null;
+
+  while (documents.length < MAX_DOCUMENTS) {
+    const queries = [Query.limit(PAGE_SIZE), Query.orderDesc("$createdAt")];
+    if (cursor) {
+      queries.push(Query.cursorAfter(cursor));
+    }
+
+    const page = await databases.listDocuments<DocumentWithId<T>>({
+      databaseId: APPWRITE_DATABASE_ID,
+      collectionId,
+      queries,
+    });
+
+    documents.push(...page.documents);
+    if (page.documents.length < PAGE_SIZE) break;
+    cursor = page.documents[page.documents.length - 1].$id;
+  }
+
+  return documents.map((document) =>
+    restoreNullableFields(key, stripDocumentMetadata<T>(document)),
+  );
+}
+
+function describeLoadError(error: unknown) {
+  const detail =
+    error instanceof Error && error.message ? error.message : "Unbekannter Fehler.";
+
+  return (
+    "Die Appwrite-Daten konnten nicht geladen werden. Prüfe, ob Datenbank und " +
+    "Collections existieren (node scripts/setup-appwrite.mjs) und der Hostname " +
+    `unter Platforms im Appwrite-Projekt eingetragen ist. Details: ${detail}`
+  );
 }
 
 function toAppUser(user: AppwriteUser): User {
@@ -90,67 +148,6 @@ function toAppUser(user: AppwriteUser): User {
     name: user.name || user.email,
     email: user.email,
   };
-}
-
-async function readSettings(): Promise<UserSettings> {
-  try {
-    const prefs = await account.getPrefs<AppwritePrefs>();
-    const aiModel = typeof prefs.aiModel === "string" && isAiModelId(prefs.aiModel)
-      ? prefs.aiModel
-      : DEFAULT_AI_MODEL_ID;
-
-    return { aiModel };
-  } catch {
-    return { aiModel: DEFAULT_AI_MODEL_ID };
-  }
-}
-
-async function listCollection<T>(key: CollectionKey): Promise<T[]> {
-  const collectionId = APPWRITE_COLLECTIONS[key];
-  const result = await databases.listDocuments<DocumentWithId<T>>({
-    databaseId: APPWRITE_DATABASE_ID,
-    collectionId,
-    queries: [Query.limit(100), Query.orderDesc("$updatedAt")],
-  });
-
-  return result.documents.map((document) =>
-    restoreNullableFields(key, stripDocumentMetadata<T>(document)),
-  );
-}
-
-async function syncCollection<T extends SyncItem>(
-  key: CollectionKey,
-  items: T[],
-  userId: string,
-) {
-  const collectionId = APPWRITE_COLLECTIONS[key];
-  const current = await databases.listDocuments<DocumentWithId<T>>({
-    databaseId: APPWRITE_DATABASE_ID,
-    collectionId,
-    queries: [Query.limit(100)],
-  });
-  const wantedIds = new Set(items.map((item) => item.id));
-
-  await Promise.all([
-    ...items.map((item) =>
-      databases.upsertDocument({
-        databaseId: APPWRITE_DATABASE_ID,
-        collectionId,
-        documentId: item.id,
-        data: toAppwriteData(item),
-        permissions: userDocumentPermissions(userId),
-      }),
-    ),
-    ...current.documents
-      .filter((document) => !wantedIds.has(document.id))
-      .map((document) =>
-        databases.deleteDocument({
-          databaseId: APPWRITE_DATABASE_ID,
-          collectionId,
-          documentId: document.$id,
-        }),
-      ),
-  ]);
 }
 
 function stripDocumentMetadata<T>(document: DocumentWithId<T>): T {
@@ -167,7 +164,7 @@ function stripDocumentMetadata<T>(document: DocumentWithId<T>): T {
   return data as T;
 }
 
-function toAppwriteData<T extends SyncItem>(item: T) {
+function toAppwriteData<T extends StoredItem>(item: T) {
   return Object.fromEntries(
     Object.entries(item).filter(([, value]) => value !== null),
   ) as Record<string, unknown>;
@@ -188,6 +185,15 @@ function restoreNullableFields<T>(key: CollectionKey, item: T): T {
   }
 
   return data as T;
+}
+
+function isNotFound(error: unknown) {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error as { code?: unknown }).code === 404
+  );
 }
 
 function userDocumentPermissions(userId: string) {

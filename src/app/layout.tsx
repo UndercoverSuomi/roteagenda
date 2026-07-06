@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Inter, Libre_Baskerville } from "next/font/google";
 import "./globals.css";
 
@@ -19,6 +19,19 @@ export const metadata: Metadata = {
   title: "Rote Agenda",
   description:
     "Capture-first To-do- und Projekt-System mit KI-gestützter Aufgabenordnung.",
+  applicationName: "Rote Agenda",
+  appleWebApp: {
+    capable: true,
+    title: "Rote Agenda",
+    statusBarStyle: "default",
+  },
+  icons: {
+    apple: "/icons/icon-180.png",
+  },
+};
+
+export const viewport: Viewport = {
+  themeColor: "#0c261f",
 };
 
 export default function RootLayout({

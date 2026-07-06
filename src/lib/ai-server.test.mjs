@@ -22,7 +22,44 @@ test("missing provider API key returns a clear configuration error", () => {
 
   assert.equal(result.ok, false);
   assert.match(result.error, /OPENAI_API_KEY/);
+  assert.match(result.error, /OPENROUTER_API_KEY/);
   assert.match(result.error, /OpenAI GPT-5\.5/);
+});
+
+test("openrouter key alone enables every model via chat completions", () => {
+  const env = { OPENROUTER_API_KEY: "sk-or-test" };
+
+  for (const option of AI_MODEL_OPTIONS) {
+    const result = resolveAiModelConfig(option.id, env);
+
+    assert.equal(result.ok, true, `${option.id} sollte über OpenRouter laufen`);
+    assert.equal(result.config.provider, "chat-completions");
+    assert.equal(result.config.apiKey, "sk-or-test");
+    assert.equal(result.config.baseUrl, "https://openrouter.ai/api/v1");
+    assert.match(result.config.model, /^[a-z0-9-]+\//, "OpenRouter-Slug erwartet");
+  }
+});
+
+test("direct provider key wins over openrouter key", () => {
+  const result = resolveAiModelConfig("deepseek-v4-pro", {
+    OPENROUTER_API_KEY: "sk-or-test",
+    DEEPSEEK_API_KEY: "sk-direct",
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.config.apiKey, "sk-direct");
+  assert.equal(result.config.baseUrl, "https://api.deepseek.com");
+  assert.equal(result.config.model, "deepseek-v4-pro");
+});
+
+test("openrouter model slug can be overridden per model", () => {
+  const result = resolveAiModelConfig("kimi-k2-7", {
+    OPENROUTER_API_KEY: "sk-or-test",
+    OPENROUTER_KIMI_K2_7_MODEL: "moonshotai/kimi-k2.7-code",
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.config.model, "moonshotai/kimi-k2.7-code");
 });
 
 test("provider JSON parsing rejects malformed responses", () => {
@@ -92,6 +129,35 @@ test("extracts JSON text from chat completions payloads", () => {
   });
 
   assert.equal(text, "{\"suggestions\":[]}");
+});
+
+test("prompt contains the provided reference date with weekday", async () => {
+  const calls = [];
+  await callAiProvider({
+    config: {
+      id: "glm-5-2",
+      label: "GLM 5.2",
+      provider: "chat-completions",
+      apiKey: "secret-key",
+      model: "glm-test",
+      baseUrl: "https://example.test/v1",
+    },
+    note: "Angebot bis Freitag fertig machen",
+    projects: [],
+    today: "2026-06-24",
+    fetchFn: async (url, init) => {
+      calls.push({ url: String(url), init });
+      return new Response(
+        JSON.stringify({
+          choices: [{ message: { content: "{\"suggestions\":[]}" } }],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    },
+  });
+
+  const prompt = JSON.parse(calls[0].init.body).messages[1].content;
+  assert.match(prompt, /Heute ist Mittwoch, 2026-06-24\./);
 });
 
 test("chat completion providers are called with configured endpoint and bearer key", async () => {

@@ -11,7 +11,13 @@ type AiProviderDefinition = {
   defaultModel: string;
   baseUrlEnv?: string;
   defaultBaseUrl?: string;
+  openRouterModelEnv: string;
+  defaultOpenRouterModel: string;
 };
+
+export const OPENROUTER_KEY_ENV = "OPENROUTER_API_KEY";
+const OPENROUTER_BASE_URL_ENV = "OPENROUTER_BASE_URL";
+const DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 
 export type ResolvedAiModelConfig = {
   id: AiModelId;
@@ -38,6 +44,7 @@ type CallAiProviderParams = {
   config: ResolvedAiModelConfig;
   note: string;
   projects: Pick<Project, "id" | "title" | "description" | "keywords" | "aiEnabled">[];
+  today?: string;
   fetchFn?: typeof fetch;
 };
 
@@ -51,6 +58,8 @@ const PROVIDER_DEFINITIONS: Record<AiModelId, AiProviderDefinition> = {
     keyEnv: "OPENAI_API_KEY",
     modelEnv: "OPENAI_GPT_5_5_MODEL",
     defaultModel: "gpt-5.5",
+    openRouterModelEnv: "OPENROUTER_GPT_5_5_MODEL",
+    defaultOpenRouterModel: "openai/gpt-5.5",
   },
   "glm-5-2": {
     provider: "chat-completions",
@@ -59,6 +68,8 @@ const PROVIDER_DEFINITIONS: Record<AiModelId, AiProviderDefinition> = {
     defaultModel: "glm-5.2",
     baseUrlEnv: "ZAI_BASE_URL",
     defaultBaseUrl: "https://api.z.ai/api/paas/v4",
+    openRouterModelEnv: "OPENROUTER_GLM_5_2_MODEL",
+    defaultOpenRouterModel: "z-ai/glm-5.2",
   },
   "kimi-k2-7": {
     provider: "chat-completions",
@@ -67,6 +78,8 @@ const PROVIDER_DEFINITIONS: Record<AiModelId, AiProviderDefinition> = {
     defaultModel: "kimi-k2.7",
     baseUrlEnv: "MOONSHOT_BASE_URL",
     defaultBaseUrl: "https://api.moonshot.ai/v1",
+    openRouterModelEnv: "OPENROUTER_KIMI_K2_7_MODEL",
+    defaultOpenRouterModel: "moonshotai/kimi-k2.7",
   },
   "qwen-3-7-plus": {
     provider: "chat-completions",
@@ -75,6 +88,8 @@ const PROVIDER_DEFINITIONS: Record<AiModelId, AiProviderDefinition> = {
     defaultModel: "qwen3.7-plus",
     baseUrlEnv: "DASHSCOPE_BASE_URL",
     defaultBaseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+    openRouterModelEnv: "OPENROUTER_QWEN_3_7_PLUS_MODEL",
+    defaultOpenRouterModel: "qwen/qwen3.7-plus",
   },
   "qwen-3-7-max": {
     provider: "chat-completions",
@@ -83,6 +98,8 @@ const PROVIDER_DEFINITIONS: Record<AiModelId, AiProviderDefinition> = {
     defaultModel: "qwen3.7-max",
     baseUrlEnv: "DASHSCOPE_BASE_URL",
     defaultBaseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+    openRouterModelEnv: "OPENROUTER_QWEN_3_7_MAX_MODEL",
+    defaultOpenRouterModel: "qwen/qwen3.7-max",
   },
   "minimax-m3": {
     provider: "chat-completions",
@@ -91,6 +108,8 @@ const PROVIDER_DEFINITIONS: Record<AiModelId, AiProviderDefinition> = {
     defaultModel: "MiniMax-M3",
     baseUrlEnv: "MINIMAX_BASE_URL",
     defaultBaseUrl: "https://api.minimax.io/v1",
+    openRouterModelEnv: "OPENROUTER_MINIMAX_M3_MODEL",
+    defaultOpenRouterModel: "minimax/minimax-m3",
   },
   "deepseek-v4-pro": {
     provider: "chat-completions",
@@ -99,6 +118,8 @@ const PROVIDER_DEFINITIONS: Record<AiModelId, AiProviderDefinition> = {
     defaultModel: "deepseek-v4-pro",
     baseUrlEnv: "DEEPSEEK_BASE_URL",
     defaultBaseUrl: "https://api.deepseek.com",
+    openRouterModelEnv: "OPENROUTER_DEEPSEEK_V4_PRO_MODEL",
+    defaultOpenRouterModel: "deepseek/deepseek-v4-pro",
   },
   "deepseek-v4-flash": {
     provider: "chat-completions",
@@ -107,6 +128,8 @@ const PROVIDER_DEFINITIONS: Record<AiModelId, AiProviderDefinition> = {
     defaultModel: "deepseek-v4-flash",
     baseUrlEnv: "DEEPSEEK_BASE_URL",
     defaultBaseUrl: "https://api.deepseek.com",
+    openRouterModelEnv: "OPENROUTER_DEEPSEEK_V4_FLASH_MODEL",
+    defaultOpenRouterModel: "deepseek/deepseek-v4-flash",
   },
 };
 
@@ -121,30 +144,49 @@ export function resolveAiModelConfig(modelId: string, env: Env = process.env): R
 
   const definition = PROVIDER_DEFINITIONS[modelId];
   const label = getAiModelLabel(modelId);
-  const apiKey = env[definition.keyEnv]?.trim();
+  const directKey = env[definition.keyEnv]?.trim();
 
-  if (!apiKey) {
+  // Direkter Anbieter-Key hat Vorrang; sonst laufen alle Modelle über OpenRouter.
+  if (directKey) {
+    const baseUrl = definition.baseUrlEnv
+      ? env[definition.baseUrlEnv]?.trim() || definition.defaultBaseUrl
+      : undefined;
+
     return {
-      ok: false,
-      status: 503,
-      error: `${label} ist nicht konfiguriert. Bitte setze die Environment Variable ${definition.keyEnv} in Appwrite/Next.`,
+      ok: true,
+      config: {
+        id: modelId,
+        label,
+        provider: definition.provider,
+        apiKey: directKey,
+        model: env[definition.modelEnv]?.trim() || definition.defaultModel,
+        baseUrl,
+      },
     };
   }
 
-  const baseUrl = definition.baseUrlEnv
-    ? env[definition.baseUrlEnv]?.trim() || definition.defaultBaseUrl
-    : undefined;
+  const openRouterKey = env[OPENROUTER_KEY_ENV]?.trim();
+
+  if (openRouterKey) {
+    return {
+      ok: true,
+      config: {
+        id: modelId,
+        label,
+        provider: "chat-completions",
+        apiKey: openRouterKey,
+        model:
+          env[definition.openRouterModelEnv]?.trim() ||
+          definition.defaultOpenRouterModel,
+        baseUrl: env[OPENROUTER_BASE_URL_ENV]?.trim() || DEFAULT_OPENROUTER_BASE_URL,
+      },
+    };
+  }
 
   return {
-    ok: true,
-    config: {
-      id: modelId,
-      label,
-      provider: definition.provider,
-      apiKey,
-      model: env[definition.modelEnv]?.trim() || definition.defaultModel,
-      baseUrl,
-    },
+    ok: false,
+    status: 503,
+    error: `${label} ist nicht konfiguriert. Setze entweder ${OPENROUTER_KEY_ENV} (ein Key für alle Modelle) oder ${definition.keyEnv} (direkter Anbieter) in Appwrite/Next.`,
   };
 }
 
@@ -178,9 +220,10 @@ export async function callAiProvider({
   config,
   note,
   projects,
+  today,
   fetchFn = fetch,
 }: CallAiProviderParams): Promise<string> {
-  const prompt = buildPrompt(note, projects);
+  const prompt = buildPrompt(note, projects, today);
   const response =
     config.provider === "openai-responses"
       ? await callOpenAiResponses(config, prompt, fetchFn)
@@ -315,9 +358,30 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+const GERMAN_WEEKDAYS = [
+  "Sonntag",
+  "Montag",
+  "Dienstag",
+  "Mittwoch",
+  "Donnerstag",
+  "Freitag",
+  "Samstag",
+];
+
+function describeToday(todayIso?: string) {
+  const iso =
+    todayIso && /^\d{4}-\d{2}-\d{2}$/.test(todayIso)
+      ? todayIso
+      : new Date().toISOString().slice(0, 10);
+  const weekday = GERMAN_WEEKDAYS[new Date(`${iso}T12:00:00Z`).getUTCDay()];
+
+  return `${weekday}, ${iso}`;
+}
+
 function buildPrompt(
   note: string,
   projects: Pick<Project, "id" | "title" | "description" | "keywords" | "aiEnabled">[],
+  today?: string,
 ) {
   const enabledProjects = projects
     .filter((project) => project.aiEnabled)
@@ -330,11 +394,13 @@ function buildPrompt(
 
   return [
     "Du bist die strukturierende KI von Rote Agenda.",
+    `Heute ist ${describeToday(today)}.`,
     "Wandle die Rohnotiz in 1 bis 4 konkrete Aufgabenvorschläge um.",
     "Antworte ausschließlich mit gültigem JSON in dieser Form:",
     '{"suggestions":[{"suggestedTitle":"...","suggestedDescription":"...","suggestedProjectId":"project-id oder null","suggestedNewProjectTitle":"Name oder null","confidence":0.0,"priority":"low|medium|high","dueDate":"YYYY-MM-DD oder null","reasoning":"kurze Begründung","needsReview":true}]}',
     "Nutze suggestedProjectId nur, wenn eines der aktivierten Projekte klar passt.",
     "Wenn kein Projekt passt, setze suggestedProjectId auf null und suggestedNewProjectTitle auf einen kurzen Projektnamen.",
+    "Rechne relative Angaben wie heute, morgen, Freitag oder nächste Woche vom heutigen Datum aus in ein konkretes dueDate um.",
     "Setze dueDate auf null, wenn keine Deadline erkennbar ist.",
     "Aktivierte Projekte:",
     JSON.stringify(enabledProjects),

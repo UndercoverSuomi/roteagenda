@@ -6,86 +6,60 @@ Diese Anleitung bereitet Rote Agenda fuer Appwrite Sites mit Appwrite Auth, Appw
 
 1. Appwrite Console oeffnen und das Projekt `Rote Agenda` auswaehlen.
 2. Unter `Auth` E-Mail/Passwort-Login aktivieren.
-3. Unter `Platforms` die Web-Hosts eintragen:
+3. Unter `Overview` → `Platforms` die Web-Hosts eintragen:
    - `localhost` fuer lokale Entwicklung
-   - `roteagenda.appwrite.network` fuer Produktion
-4. Unter `Databases` eine Datenbank fuer Rote Agenda anlegen.
-5. Fuenf Collections anlegen und die Collection IDs als Environment Variables hinterlegen.
+   - `roteagenda.appwrite.network` (bzw. eigene Domain) fuer Produktion
+   - Wichtig: Ohne Plattform-Eintrag schlagen Login und der Passwort-Reset-Link fehl.
+4. Unter `Overview` → `Integrations` → `API keys` einen Key anlegen und bei den Scopes alle Eintraege der Kategorie **Databases** anhaken (`databases.*`, `collections.*`, `attributes.*` – jeweils read und write). Der Key wird nur fuer das Setup-Script gebraucht, nicht fuer die App.
 
-## Collections
+## Datenbank und Collections anlegen
 
-Alle Collections sollten Document Security nutzen. Erlaube authentifizierten Nutzern das Erstellen von Dokumenten; die App setzt beim Speichern pro Dokument `read`, `update` und `delete` fuer den jeweiligen Nutzer.
+```bash
+APPWRITE_API_KEY=<api-key> node scripts/setup-appwrite.mjs
+```
 
-### projects
+Das Script ist idempotent und erstellt:
 
-- `id` string, required
-- `title` string, required
-- `description` string, required
-- `keywords` string array, required
-- `progress` integer, required
-- `aiEnabled` boolean, required
-- `createdAt` string, required
-- `updatedAt` string, required
+- Datenbank `roteagenda`
+- Collections `projects`, `tasks`, `rawNotes`, `suggestions` mit Document Security und `create("users")`-Berechtigung
+- alle Attribute laut Schema (siehe unten)
+- `.env.local` mit den passenden `NEXT_PUBLIC_APPWRITE_*`-Werten
 
-### tasks
+Die App setzt beim Speichern pro Dokument `read`, `update` und `delete` fuer den jeweiligen Nutzer.
 
-- `id` string, required
-- `title` string, required
-- `description` string, required
-- `projectId` string, required
-- `status` string, required
-- `priority` string, required
-- `dueDate` string, optional
-- `sourceNoteId` string, optional
-- `createdBy` string, required
-- `createdAt` string, required
-- `updatedAt` string, required
+### Schema-Referenz
 
-### rawNotes
+Nur relevant, falls Collections manuell angelegt werden. Textfelder, die leer sein koennen, sind optional; die App validiert Pflichtfelder clientseitig.
 
-- `id` string, required
-- `content` string, required
-- `processed` boolean, required
-- `createdAt` string, required
+**projects:** `id` (string, required), `title` (string, required), `description` (string), `keywords` (string array), `progress` (integer, required), `aiEnabled` (boolean, required), `createdAt`/`updatedAt` (string, required)
 
-### suggestions
+**tasks:** `id` (string, required), `title` (string, required), `description` (string), `projectId` (string, required), `status` (string, required), `priority` (string, required), `dueDate` (string), `sourceNoteId` (string), `createdBy` (string, required), `createdAt`/`updatedAt` (string, required)
 
-- `id` string, required
-- `rawNoteId` string, required
-- `suggestedTitle` string, required
-- `suggestedDescription` string, required
-- `suggestedProjectId` string, optional
-- `suggestedNewProjectTitle` string, optional
-- `confidence` float, required
-- `priority` string, required
-- `dueDate` string, optional
-- `reasoning` string, required
-- `needsReview` boolean, required
-- `state` string, required
-- `createdAt` string, required
+**rawNotes:** `id` (string, required), `content` (string, required), `processed` (boolean, required), `createdAt` (string, required)
 
-### tags
-
-- `id` string, required
-- `label` string, required
-- `color` string, required
+**suggestions:** `id` (string, required), `rawNoteId` (string, required), `suggestedTitle` (string, required), `suggestedDescription` (string), `suggestedProjectId` (string), `suggestedNewProjectTitle` (string), `confidence` (float, required), `priority` (string, required), `dueDate` (string), `reasoning` (string), `needsReview` (boolean, required), `state` (string, required), `createdAt` (string, required)
 
 ## Environment Variables
 
-Public Appwrite-Werte:
+Die Code-Defaults entsprechen bereits den vom Script angelegten IDs. Nur bei abweichenden IDs setzen:
 
 ```bash
 NEXT_PUBLIC_APPWRITE_ENDPOINT=https://fra.cloud.appwrite.io/v1
 NEXT_PUBLIC_APPWRITE_PROJECT_ID=6a3bbc6600236e6bf22a
-NEXT_PUBLIC_APPWRITE_DATABASE_ID=...
-NEXT_PUBLIC_APPWRITE_PROJECTS_COLLECTION_ID=...
-NEXT_PUBLIC_APPWRITE_TASKS_COLLECTION_ID=...
-NEXT_PUBLIC_APPWRITE_RAW_NOTES_COLLECTION_ID=...
-NEXT_PUBLIC_APPWRITE_SUGGESTIONS_COLLECTION_ID=...
-NEXT_PUBLIC_APPWRITE_TAGS_COLLECTION_ID=...
+NEXT_PUBLIC_APPWRITE_DATABASE_ID=roteagenda
+NEXT_PUBLIC_APPWRITE_PROJECTS_COLLECTION_ID=projects
+NEXT_PUBLIC_APPWRITE_TASKS_COLLECTION_ID=tasks
+NEXT_PUBLIC_APPWRITE_RAW_NOTES_COLLECTION_ID=rawNotes
+NEXT_PUBLIC_APPWRITE_SUGGESTIONS_COLLECTION_ID=suggestions
 ```
 
-Serverseitige KI-Keys:
+Serverseitige KI-Keys. Am einfachsten ist ein OpenRouter-Key fuer alle Modelle:
+
+```bash
+OPENROUTER_API_KEY=sk-or-v1-...
+```
+
+Alternativ (oder zusaetzlich, direkte Keys haben Vorrang) je Anbieter:
 
 ```bash
 OPENAI_API_KEY=...
@@ -96,25 +70,9 @@ MINIMAX_API_KEY=...
 DEEPSEEK_API_KEY=...
 ```
 
-Optionale Provider-Overrides:
+Optionale Provider-Overrides (Base-URLs, Modell-Slugs): siehe [.env.example](../.env.example).
 
-```bash
-OPENAI_GPT_5_5_MODEL=gpt-5.5
-ZAI_BASE_URL=https://api.z.ai/api/paas/v4
-ZAI_GLM_5_2_MODEL=glm-5.2
-MOONSHOT_BASE_URL=https://api.moonshot.ai/v1
-MOONSHOT_KIMI_K2_7_MODEL=kimi-k2.7
-DASHSCOPE_BASE_URL=https://dashscope-intl.aliyuncs.com/compatible-mode/v1
-DASHSCOPE_QWEN_3_7_PLUS_MODEL=qwen3.7-plus
-DASHSCOPE_QWEN_3_7_MAX_MODEL=qwen3.7-max
-MINIMAX_BASE_URL=https://api.minimax.io/v1
-MINIMAX_M3_MODEL=MiniMax-M3
-DEEPSEEK_BASE_URL=https://api.deepseek.com
-DEEPSEEK_V4_PRO_MODEL=deepseek-v4-pro
-DEEPSEEK_V4_FLASH_MODEL=deepseek-v4-flash
-```
-
-Fehlt ein Key fuer das vom Nutzer gewaehlte Modell, gibt `/api/ai/process-note` eine klare Fehlermeldung zurueck. Es gibt keinen Mock-KI-Fallback.
+Fehlt ein Key fuer das vom Nutzer gewaehlte Modell, gibt `/api/ai/process-note` eine klare Fehlermeldung zurueck. Es gibt keinen Mock-KI-Fallback. Die Route drosselt zusaetzlich auf 20 Anfragen pro Nutzer und 10 Minuten und begrenzt Notizen auf 4000 Zeichen.
 
 ## GitHub Deployment
 
@@ -130,9 +88,9 @@ Fehlt ein Key fuer das vom Nutzer gewaehlte Modell, gibt `/api/ai/process-note` 
    - Output directory: `./.next`
    - Rendering: `SSR`
    - Runtime: `Node.js 22` oder neuer
-8. Environment Variables setzen.
+8. Environment Variables setzen (mindestens die KI-Keys).
 9. Deploy starten.
-10. Nach erfolgreichem Build ueber `Visit site` die Appwrite-URL oeffnen.
+10. Nach erfolgreichem Build ueber `Visit site` die Appwrite-URL oeffnen und die Domain als Platform eintragen (siehe oben).
 
 ## Lokale Vorabpruefung
 
