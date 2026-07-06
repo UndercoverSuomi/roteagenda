@@ -34,6 +34,15 @@ export function addDays(date: Date, days: number) {
   return copy;
 }
 
+// Liefert den nächsten Montag strikt nach dem Ausgangsdatum
+// (für "Nächste Woche" beim Schnell-Verschieben).
+export function nextMonday(from: Date) {
+  const copy = new Date(from);
+  const delta = (1 + 7 - copy.getDay()) % 7 || 7;
+  copy.setDate(copy.getDate() + delta);
+  return copy;
+}
+
 export function formatDateLabel(isoDate: string | null, locale: Locale = "de") {
   if (!isoDate) return translate(locale, "date.none");
 

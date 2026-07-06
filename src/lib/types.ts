@@ -4,6 +4,7 @@ import type { Locale } from "@/lib/i18n";
 export type TaskStatus = "open" | "in_progress" | "done";
 export type TaskPriority = "low" | "medium" | "high";
 export type SuggestionState = "pending" | "accepted" | "rejected";
+export type GoogleSyncTarget = "calendar" | "tasks";
 
 export interface User {
   id: string;
@@ -33,6 +34,8 @@ export interface Task {
   dueDate: string | null;
   sourceNoteId: string | null;
   createdBy: "user" | "ai";
+  // Merkt sich eine erfolgreiche Google-Übertragung (Kalender oder Tasks).
+  googleSynced: GoogleSyncTarget | null;
   createdAt: string;
   updatedAt: string;
 }

@@ -1,7 +1,9 @@
+import type { UrlScreen } from "@/lib/app-url";
 import type { MessageKey } from "@/lib/i18n";
 import type { TaskPriority, TaskStatus } from "@/lib/types";
 
-export type Screen = "welcome" | "today" | "capture" | "inbox" | "projects" | "project" | "task" | "more";
+// Alle URL-adressierbaren Screens plus der einmalige Startbildschirm.
+export type Screen = UrlScreen | "welcome";
 export type TaskFilter = "all" | "today" | "planned" | "later";
 export type ProjectDetailTab = "tasks" | "details" | "notes";
 export type TaskDetailTab = "details" | "raw" | "ai";

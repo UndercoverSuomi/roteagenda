@@ -1,11 +1,12 @@
 import { ArrowLeft, CheckSquare2, Edit3, Square } from "lucide-react";
+import { cx } from "@/components/app-helpers";
 import { priorityKeys, statusKeys, type TaskDetailTab } from "@/components/app-types";
 import { DetailTabs } from "@/components/ui/controls";
 import { GoogleSection } from "@/components/ui/google-section";
 import { InfoTile, ScreenHeader } from "@/components/ui/primitives";
-import { formatDateLabel } from "@/lib/date";
+import { addDays, formatDateLabel, nextMonday, toIsoDate } from "@/lib/date";
 import type { Locale, Translator } from "@/lib/i18n";
-import type { AiSuggestion, Project, Task } from "@/lib/types";
+import type { AiSuggestion, GoogleSyncTarget, Project, Task } from "@/lib/types";
 
 export function TaskDetailScreen({
   task,
@@ -20,6 +21,8 @@ export function TaskDetailScreen({
   onEdit,
   onToggleDone,
   onOpenProject,
+  onReschedule,
+  onGoogleSynced,
 }: {
   task: Task;
   project?: Project;
@@ -33,7 +36,17 @@ export function TaskDetailScreen({
   onEdit: () => void;
   onToggleDone: () => void;
   onOpenProject: () => void;
+  onReschedule: (dueDate: string | null) => void;
+  onGoogleSynced: (target: GoogleSyncTarget) => void;
 }) {
+  const now = new Date();
+  const rescheduleOptions: Array<{ label: string; value: string | null }> = [
+    { label: t("date.today"), value: toIsoDate(now) },
+    { label: t("date.tomorrow"), value: toIsoDate(addDays(now, 1)) },
+    { label: t("date.nextWeek"), value: toIsoDate(nextMonday(now)) },
+    { label: t("date.none"), value: null },
+  ];
+
   return (
     <div className="flex flex-1 flex-col pt-3 md:pt-8">
       <div className="px-6 md:px-8 lg:px-10">
@@ -68,6 +81,32 @@ export function TaskDetailScreen({
               {project?.title ?? t("task.noProject")}
             </span>
           </button>
+        </div>
+        <div className="mt-5">
+          <p className="text-[11px] font-bold uppercase tracking-[0.04em] text-[var(--muted)]">
+            {t("task.reschedule")}
+          </p>
+          <div className="mt-2 flex flex-wrap gap-2">
+            {rescheduleOptions.map((option) => {
+              const active = task.dueDate === option.value;
+              return (
+                <button
+                  key={option.label}
+                  type="button"
+                  onClick={() => onReschedule(option.value)}
+                  aria-pressed={active}
+                  className={cx(
+                    "rounded-full px-3 py-1.5 text-[12px] font-semibold transition",
+                    active
+                      ? "bg-[var(--green)] text-white"
+                      : "border border-[var(--line-strong)] hover:bg-[var(--surface-strong)]",
+                  )}
+                >
+                  {option.label}
+                </button>
+              );
+            })}
+          </div>
         </div>
         <label className="mt-5 flex items-center gap-3 rounded-[6px] border border-[var(--line)] bg-[var(--surface)] p-4 text-[14px] font-bold">
           <button
@@ -107,7 +146,7 @@ export function TaskDetailScreen({
                 {task.description || t("task.noDescription")}
               </p>
             </section>
-            <GoogleSection key={task.id} task={task} t={t} />
+            <GoogleSection key={task.id} task={task} t={t} onSynced={onGoogleSynced} />
           </>
         ) : null}
         {tab === "raw" ? (

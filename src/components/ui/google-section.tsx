@@ -10,10 +10,21 @@ import {
   preloadGoogleIdentity,
 } from "@/lib/google";
 import type { Translator } from "@/lib/i18n";
-import type { Task } from "@/lib/types";
+import type { GoogleSyncTarget, Task } from "@/lib/types";
 
-export function GoogleSection({ task, t }: { task: Task; t: Translator }) {
+export function GoogleSection({
+  task,
+  t,
+  onSynced,
+}: {
+  task: Task;
+  t: Translator;
+  onSynced: (target: GoogleSyncTarget) => void;
+}) {
   const [state, setState] = useState<"idle" | "working" | "done">("idle");
+  // Nach einer bereits gespeicherten Übertragung lässt sich der Button
+  // bewusst erneut einblenden ("Erneut übertragen").
+  const [showAgain, setShowAgain] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const hasDate = Boolean(task.dueDate);
 
@@ -24,7 +35,8 @@ export function GoogleSection({ task, t }: { task: Task; t: Translator }) {
   async function handleTransfer() {
     setError(null);
 
-    // Ohne Client-ID öffnet der Kalender-Weg die offizielle Vorbefüll-Seite.
+    // Ohne Client-ID öffnet der Kalender-Weg die offizielle Vorbefüll-Seite;
+    // ob der Termin dort bestätigt wird, wissen wir nicht — kein Sync-Status.
     if (hasDate && !isGoogleConfigured) {
       window.open(
         buildCalendarTemplateUrl({
@@ -40,6 +52,7 @@ export function GoogleSection({ task, t }: { task: Task; t: Translator }) {
 
     setState("working");
     try {
+      const target: GoogleSyncTarget = hasDate ? "calendar" : "tasks";
       if (hasDate) {
         await addEventToGoogleCalendar({
           title: task.title,
@@ -54,6 +67,8 @@ export function GoogleSection({ task, t }: { task: Task; t: Translator }) {
         });
       }
       setState("done");
+      setShowAgain(false);
+      onSynced(target);
     } catch (transferError) {
       setState("idle");
       setError(
@@ -67,6 +82,10 @@ export function GoogleSection({ task, t }: { task: Task; t: Translator }) {
     }
   }
 
+  // Frisch übertragen zählt vor dem gespeicherten Status (z. B. nach "Erneut übertragen").
+  const syncedTarget: GoogleSyncTarget | null =
+    state === "done" ? (hasDate ? "calendar" : "tasks") : task.googleSynced;
+
   return (
     <section>
       <h2 className="text-[12px] font-bold uppercase tracking-[0.04em] text-[var(--muted)]">
@@ -76,10 +95,19 @@ export function GoogleSection({ task, t }: { task: Task; t: Translator }) {
         <p className="mt-2 text-[13px] leading-6 text-[var(--muted)]">
           {t("google.tasksNotConfigured")}
         </p>
-      ) : state === "done" ? (
-        <p className="mt-2 rounded-[5px] border border-[var(--line)] bg-[var(--surface)] p-3 text-[13px] font-bold text-[var(--green-2)]">
-          {hasDate ? t("google.doneCalendar") : t("google.doneTasks")}
-        </p>
+      ) : syncedTarget && !showAgain ? (
+        <div className="mt-2">
+          <p className="rounded-[5px] border border-[var(--line)] bg-[var(--surface)] p-3 text-[13px] font-bold text-[var(--green-2)]">
+            {syncedTarget === "calendar" ? t("google.doneCalendar") : t("google.doneTasks")}
+          </p>
+          <button
+            type="button"
+            onClick={() => setShowAgain(true)}
+            className="mt-2 text-[12px] font-bold text-[var(--muted)] underline underline-offset-2"
+          >
+            {t("google.sendAgain")}
+          </button>
+        </div>
       ) : (
         <button
           type="button"

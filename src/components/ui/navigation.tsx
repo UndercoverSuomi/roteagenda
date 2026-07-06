@@ -1,4 +1,4 @@
-import { ClipboardList, Home, Inbox, MoreHorizontal, Plus } from "lucide-react";
+import { ClipboardList, Home, Inbox, MoreHorizontal, Plus, Search } from "lucide-react";
 import { cx } from "@/components/app-helpers";
 import type { Screen } from "@/components/app-types";
 import { ThemeToggleButton } from "@/components/ui/controls";
@@ -96,6 +96,7 @@ export function DesktopSidebar({
       label: `${t("nav.inbox")}${pendingCount ? ` (${pendingCount})` : ""}`,
       icon: Inbox,
     },
+    { screen: "search" as Screen, label: t("nav.search"), icon: Search },
     { screen: "more" as Screen, label: t("nav.more"), icon: MoreHorizontal },
   ];
 

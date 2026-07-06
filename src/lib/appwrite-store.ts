@@ -190,6 +190,7 @@ function restoreNullableFields<T>(key: CollectionKey, item: T): T {
   if (key === "tasks") {
     data.dueDate ??= null;
     data.sourceNoteId ??= null;
+    data.googleSynced ??= null;
   }
 
   if (key === "suggestions") {

@@ -76,6 +76,7 @@ const COLLECTIONS = [
       string("dueDate", 16, false),
       string("sourceNoteId", 64, false),
       string("createdBy", 8),
+      string("googleSynced", 16, false),
       string("createdAt", 32),
       string("updatedAt", 32),
     ],

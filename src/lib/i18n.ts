@@ -30,9 +30,15 @@ const messages = {
   "common.close": { de: "Schließen", en: "Close" },
   "common.back": { de: "Zurück", en: "Back" },
   "common.pleaseWait": { de: "Bitte warten...", en: "Please wait..." },
+  "common.undo": { de: "Rückgängig", en: "Undo" },
   "error.unexpected": {
     de: "Unerwarteter Fehler. Bitte versuche es erneut.",
     en: "Unexpected error. Please try again.",
+  },
+  "undo.taskDeleted": { de: "Aufgabe gelöscht.", en: "Task deleted." },
+  "undo.projectDeleted": {
+    de: "Projekt samt Aufgaben gelöscht.",
+    en: "Project and its tasks deleted.",
   },
 
   // Auth
@@ -91,6 +97,7 @@ const messages = {
   "today.title": { de: "Heute", en: "Today" },
   "today.openMore": { de: "Mehr öffnen", en: "Open more" },
   "today.openInbox": { de: "Inbox öffnen", en: "Open inbox" },
+  "today.openSearch": { de: "Suche öffnen", en: "Open search" },
   "today.capturePrompt": { de: "Was beschäftigt dich?", en: "What's on your mind?" },
   "today.aiUpdate": { de: "KI-Update", en: "AI update" },
   "today.notesProcessed.one": { de: "{count} Notiz verarbeitet", en: "{count} note processed" },
@@ -156,6 +163,24 @@ const messages = {
   "inbox.emptyTitle": { de: "Inbox ist leer", en: "Inbox is empty" },
   "inbox.emptyText": { de: "Alle Vorschläge sind geprüft.", en: "All suggestions are reviewed." },
 
+  // Suche
+  "search.title": { de: "Suche", en: "Search" },
+  "search.placeholder": {
+    de: "Aufgaben, Projekte, Notizen…",
+    en: "Tasks, projects, notes…",
+  },
+  "search.hint": {
+    de: "Durchsucht Titel, Beschreibungen, Projekt-Keywords und Rohnotizen.",
+    en: "Searches titles, descriptions, project keywords and raw notes.",
+  },
+  "search.empty": {
+    de: "Keine Treffer für „{query}“.",
+    en: "No results for “{query}”.",
+  },
+  "search.tasks": { de: "Aufgaben", en: "Tasks" },
+  "search.projects": { de: "Projekte", en: "Projects" },
+  "search.notes": { de: "Rohnotizen", en: "Raw notes" },
+
   // Projects
   "projects.title": { de: "Projekte", en: "Projects" },
   "projects.new": { de: "Neues Projekt anlegen", en: "Create a new project" },
@@ -207,6 +232,7 @@ const messages = {
   "task.aiHeading": { de: "KI-Zusammenfassung", en: "AI summary" },
   "task.noAi": { de: "Keine KI-Zusammenfassung vorhanden.", en: "No AI summary available." },
   "task.edit": { de: "Aufgabe bearbeiten", en: "Edit task" },
+  "task.reschedule": { de: "Schnell verschieben", en: "Quick reschedule" },
   "status.open": { de: "Offen", en: "Open" },
   "status.in_progress": { de: "In Arbeit", en: "In progress" },
   "status.done": { de: "Erledigt", en: "Done" },
@@ -259,6 +285,7 @@ const messages = {
     de: "Für Google Tasks fehlt noch die Einrichtung (NEXT_PUBLIC_GOOGLE_CLIENT_ID, siehe README).",
     en: "Google Tasks still needs setup (NEXT_PUBLIC_GOOGLE_CLIENT_ID, see README).",
   },
+  "google.sendAgain": { de: "Erneut übertragen", en: "Send again" },
 
   // Task editor
   "taskEditor.title": { de: "Aufgabe bearbeiten", en: "Edit task" },
@@ -303,6 +330,7 @@ const messages = {
   "nav.today": { de: "Heute", en: "Today" },
   "nav.projects": { de: "Projekte", en: "Projects" },
   "nav.inbox": { de: "Inbox", en: "Inbox" },
+  "nav.search": { de: "Suche", en: "Search" },
   "nav.more": { de: "Mehr", en: "More" },
   "nav.capture": { de: "Schnellnotiz erfassen", en: "Capture quick note" },
   "nav.captureButton": { de: "Schnell erfassen", en: "Quick capture" },
@@ -365,6 +393,7 @@ const messages = {
   "date.yesterday": { de: "Gestern", en: "Yesterday" },
   "date.today": { de: "Heute", en: "Today" },
   "date.tomorrow": { de: "Morgen", en: "Tomorrow" },
+  "date.nextWeek": { de: "Nächste Woche", en: "Next week" },
 
   // Reset password page
   "reset.title": { de: "Neues Passwort setzen", en: "Set a new password" },

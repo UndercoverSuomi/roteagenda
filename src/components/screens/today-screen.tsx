@@ -1,6 +1,6 @@
 "use client";
 
-import { Bell, ChevronRight, Menu, Plus, Sparkles } from "lucide-react";
+import { Bell, ChevronRight, Menu, Plus, Search, Sparkles } from "lucide-react";
 import { useMemo } from "react";
 import type { AiStats, TaskFilter } from "@/components/app-types";
 import { TaskTabs } from "@/components/ui/controls";
@@ -25,6 +25,7 @@ export function TodayScreen({
   onCapture,
   onOpenInbox,
   onOpenMore,
+  onOpenSearch,
 }: {
   tasks: Task[];
   projects: Map<string, Project>;
@@ -39,6 +40,7 @@ export function TodayScreen({
   onCapture: () => void;
   onOpenInbox: () => void;
   onOpenMore: () => void;
+  onOpenSearch: () => void;
 }) {
   const isBrandNew = !tasks.length && !aiStats.processedNotes && filter === "all";
 
@@ -78,10 +80,13 @@ export function TodayScreen({
       <ScreenHeader
         title={t("today.title")}
         leftIcon={<Menu className="h-6 w-6" />}
+        extraRightIcon={<Search className="h-5 w-5" />}
         rightIcon={<Bell className="h-5 w-5" />}
         leftLabel={t("today.openMore")}
+        extraRightLabel={t("today.openSearch")}
         rightLabel={t("today.openInbox")}
         onLeft={onOpenMore}
+        onExtraRight={onOpenSearch}
         onRight={onOpenInbox}
       />
 

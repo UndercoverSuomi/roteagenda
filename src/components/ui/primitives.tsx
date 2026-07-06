@@ -58,18 +58,25 @@ export function ScreenHeader({
   title,
   leftIcon,
   rightIcon,
+  extraRightIcon,
   leftLabel,
   rightLabel,
+  extraRightLabel,
   onLeft,
   onRight,
+  onExtraRight,
 }: {
   title: string;
   leftIcon?: React.ReactNode;
   rightIcon?: React.ReactNode;
+  // Optionaler zweiter Icon-Slot links neben dem rechten Icon.
+  extraRightIcon?: React.ReactNode;
   leftLabel?: string;
   rightLabel?: string;
+  extraRightLabel?: string;
   onLeft?: () => void;
   onRight?: () => void;
+  onExtraRight?: () => void;
 }) {
   const leftSlotClass = "grid h-10 w-10 place-items-center text-[var(--ink)]";
   const rightSlotClass = `${leftSlotClass} justify-self-end`;
@@ -100,9 +107,17 @@ export function ScreenHeader({
   }
 
   return (
-    <header className="grid h-10 grid-cols-[44px_1fr_44px] items-center">
+    <header
+      className={cx(
+        "grid h-10 items-center",
+        extraRightIcon ? "grid-cols-[44px_1fr_44px_44px]" : "grid-cols-[44px_1fr_44px]",
+      )}
+    >
       {renderSlot(leftIcon, onLeft, leftSlotClass, leftLabel)}
       <h1 className="font-display text-[25px] font-bold leading-none">{title}</h1>
+      {extraRightIcon
+        ? renderSlot(extraRightIcon, onExtraRight, rightSlotClass, extraRightLabel)
+        : null}
       {renderSlot(rightIcon, onRight, rightSlotClass, rightLabel)}
     </header>
   );

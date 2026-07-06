@@ -11,7 +11,10 @@ Die Oberflaeche ist zuerst als responsives Webtool gedacht: schnell am Handy erf
 - KI verarbeitet und klassifiziert die Rohnotiz (mit aktuellem Datum als Referenz, auf Deutsch oder Englisch)
 - Vorschlag pruefen, bearbeiten, uebernehmen oder ignorieren
 - Aufgabe erscheint im passenden Projekt und auf dem Heute-Dashboard
-- Aufgaben abhaken, bearbeiten, Projekte anlegen und verwalten
+- Aufgaben abhaken, bearbeiten, per Schnellauswahl verschieben (heute/morgen/naechste Woche), Projekte anlegen und verwalten
+- Suche ueber Aufgaben, Projekte und Rohnotizen
+- Geloeschte Aufgaben und Projekte lassen sich direkt per Toast rueckgaengig machen
+- Jede Ansicht hat eine eigene URL: Browser-Zurueck funktioniert, Aufgaben und Projekte sind verlinkbar
 
 ## Einstellungen
 
@@ -22,7 +25,7 @@ Die Oberflaeche ist zuerst als responsives Webtool gedacht: schnell am Handy erf
 
 ## Google-Integration (optional)
 
-In der Aufgabenansicht lassen sich Aufgaben per Klick an Google uebergeben: mit Termin als Google-Kalender-Eintrag, ohne Termin als Google Task.
+In der Aufgabenansicht lassen sich Aufgaben per Klick an Google uebergeben: mit Termin als Google-Kalender-Eintrag, ohne Termin als Google Task. Erfolgreiche Uebertragungen werden an der Aufgabe gespeichert und ueberleben Reloads; ein erneutes Senden ist bewusst moeglich.
 
 - Ohne Einrichtung funktioniert der Kalender-Button sofort (oeffnet Google Kalender mit vorbefuelltem Termin zum Bestaetigen).
 - Fuer Google Tasks und das direkte Anlegen im Kalender wird eine OAuth-Client-ID benoetigt:
@@ -54,6 +57,8 @@ APPWRITE_API_KEY=<api-key> node scripts/setup-appwrite.mjs
 ```
 
 Das Script legt idempotent die Datenbank `roteagenda` mit den vier Collections `projects`, `tasks`, `rawNotes` und `suggestions` samt Attributen an und schreibt die IDs in `.env.local`. Da der Code dieselben IDs als Defaults nutzt, sind abweichende Environment Variables nur noch bei eigenen IDs noetig.
+
+Nach einem Update mit Schema-Aenderungen das Script einfach erneut ausfuehren — es ergaenzt nur fehlende Attribute (z. B. `tasks.googleSynced` fuer den gespeicherten Google-Uebertragungsstatus).
 
 Zusaetzlich in der Appwrite Console:
 

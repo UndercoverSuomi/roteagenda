@@ -33,7 +33,7 @@ Nur relevant, falls Collections manuell angelegt werden. Textfelder, die leer se
 
 **projects:** `id` (string, required), `title` (string, required), `description` (string), `keywords` (string array), `color` (string), `progress` (integer, required), `aiEnabled` (boolean, required), `createdAt`/`updatedAt` (string, required)
 
-**tasks:** `id` (string, required), `title` (string, required), `description` (string), `projectId` (string, required), `status` (string, required), `priority` (string, required), `dueDate` (string), `sourceNoteId` (string), `createdBy` (string, required), `createdAt`/`updatedAt` (string, required)
+**tasks:** `id` (string, required), `title` (string, required), `description` (string), `projectId` (string, required), `status` (string, required), `priority` (string, required), `dueDate` (string), `sourceNoteId` (string), `createdBy` (string, required), `googleSynced` (string), `createdAt`/`updatedAt` (string, required)
 
 **rawNotes:** `id` (string, required), `content` (string, required), `processed` (boolean, required), `createdAt` (string, required)
 
