@@ -160,6 +160,38 @@ test("prompt contains the provided reference date with weekday", async () => {
   assert.match(prompt, /Heute ist Mittwoch, 2026-06-24\./);
 });
 
+test("english locale produces an english prompt and system message", async () => {
+  const calls = [];
+  await callAiProvider({
+    config: {
+      id: "glm-5-2",
+      label: "GLM 5.2",
+      provider: "chat-completions",
+      apiKey: "secret-key",
+      model: "glm-test",
+      baseUrl: "https://example.test/v1",
+    },
+    note: "Finish the proposal by Friday",
+    projects: [],
+    today: "2026-06-24",
+    locale: "en",
+    fetchFn: async (url, init) => {
+      calls.push({ url: String(url), init });
+      return new Response(
+        JSON.stringify({
+          choices: [{ message: { content: "{\"suggestions\":[]}" } }],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    },
+  });
+
+  const body = JSON.parse(calls[0].init.body);
+  assert.match(body.messages[0].content, /respond exclusively with JSON/);
+  assert.match(body.messages[1].content, /Today is Wednesday, 2026-06-24\./);
+  assert.match(body.messages[1].content, /in English/);
+});
+
 test("chat completion providers are called with configured endpoint and bearer key", async () => {
   const calls = [];
   const text = await callAiProvider({

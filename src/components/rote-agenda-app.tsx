@@ -15,6 +15,7 @@ import {
   Home,
   Inbox,
   Menu,
+  Mic,
   MoreHorizontal,
   Plus,
   Sparkles,
@@ -24,7 +25,7 @@ import {
   X,
 } from "lucide-react";
 import { ID, type Models } from "appwrite";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { account, client } from "@/lib/appwrite";
 import { processRawNoteWithConfiguredAi } from "@/lib/ai-client";
 import { AI_MODEL_OPTIONS, MAX_NOTE_LENGTH, type AiModelId } from "@/lib/ai-models";
@@ -37,7 +38,21 @@ import {
   upsertItem,
 } from "@/lib/appwrite-store";
 import { formatDateLabel, isOverdue, toIsoDate } from "@/lib/date";
-import { createSyncQueue, type SyncStatus } from "@/lib/sync-queue";
+import {
+  detectDeviceLocale,
+  storeDeviceLocale,
+  translate,
+  type Locale,
+  type MessageKey,
+  type Translator,
+} from "@/lib/i18n";
+import {
+  applyTheme,
+  readStoredTheme,
+  storeTheme,
+  type ThemePreference,
+} from "@/lib/theme";
+import { createSyncQueue, type SyncFailure, type SyncStatus } from "@/lib/sync-queue";
 import type {
   AiSuggestion,
   AppData,
@@ -56,20 +71,48 @@ type AuthMode = "login" | "register" | "recover";
 type AuthStatus = "loading" | "signedOut" | "signedIn";
 type DataStatus = "idle" | "loading" | "ready" | "error";
 
-const priorityLabels: Record<TaskPriority, string> = {
-  low: "Niedrig",
-  medium: "Mittel",
-  high: "Hoch",
+const priorityKeys: Record<TaskPriority, MessageKey> = {
+  low: "priority.low",
+  medium: "priority.medium",
+  high: "priority.high",
 };
 
-const statusLabels: Record<TaskStatus, string> = {
-  open: "Offen",
-  in_progress: "In Arbeit",
-  done: "Erledigt",
+const statusKeys: Record<TaskStatus, MessageKey> = {
+  open: "status.open",
+  in_progress: "status.in_progress",
+  done: "status.done",
 };
 
 function cx(...classes: Array<string | false | null | undefined>) {
   return classes.filter(Boolean).join(" ");
+}
+
+// Minimale Typen für die Web Speech API (nicht Teil der TS-DOM-Typen).
+type SpeechAlternativeLike = { transcript: string };
+type SpeechResultLike = { isFinal: boolean; 0: SpeechAlternativeLike };
+type SpeechResultListLike = { length: number; [index: number]: SpeechResultLike };
+type SpeechEventLike = { resultIndex: number; results: SpeechResultListLike };
+type SpeechErrorEventLike = { error: string };
+type SpeechRecognitionLike = {
+  lang: string;
+  continuous: boolean;
+  interimResults: boolean;
+  onresult: ((event: SpeechEventLike) => void) | null;
+  onerror: ((event: SpeechErrorEventLike) => void) | null;
+  onend: (() => void) | null;
+  start: () => void;
+  stop: () => void;
+};
+
+function getSpeechRecognitionCtor(): (new () => SpeechRecognitionLike) | null {
+  if (typeof window === "undefined") return null;
+
+  const candidates = window as unknown as {
+    SpeechRecognition?: new () => SpeechRecognitionLike;
+    webkitSpeechRecognition?: new () => SpeechRecognitionLike;
+  };
+
+  return candidates.SpeechRecognition ?? candidates.webkitSpeechRecognition ?? null;
 }
 
 export function RoteAgendaApp() {
@@ -79,11 +122,11 @@ export function RoteAgendaApp() {
   const [authMode, setAuthMode] = useState<AuthMode>("login");
   const [isAuthSubmitting, setIsAuthSubmitting] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
-  const [authNotice, setAuthNotice] = useState<string | null>(null);
+  const [recoverySent, setRecoverySent] = useState(false);
   const [dataStatus, setDataStatus] = useState<DataStatus>("idle");
   const [dataError, setDataError] = useState<string | null>(null);
   const [syncStatus, setSyncStatus] = useState<SyncStatus>("idle");
-  const [syncError, setSyncError] = useState<string | null>(null);
+  const [syncFailure, setSyncFailure] = useState<SyncFailure | null>(null);
   const [screen, setScreen] = useState<Screen>("welcome");
   const [taskFilter, setTaskFilter] = useState<TaskFilter>("all");
   const [projectTab, setProjectTab] = useState<ProjectDetailTab>("tasks");
@@ -97,21 +140,50 @@ export function RoteAgendaApp() {
   const [editingTask, setEditingTask] = useState<Task | null>(null);
   const [editingProject, setEditingProject] = useState<Project | null>(null);
   const [editingSuggestionId, setEditingSuggestionId] = useState<string | null>(null);
+  const [locale, setLocale] = useState<Locale>("de");
+  // Theme beeinflusst kein Server-HTML (nur MoreScreen-Select + Effekt),
+  // daher ist die direkte Initialisierung hydration-sicher.
+  const [themePref, setThemePref] = useState<ThemePreference>(() => readStoredTheme());
+
+  const t = useMemo<Translator>(
+    () => (key, params) => translate(locale, key, params),
+    [locale],
+  );
 
   const syncQueue = useMemo(
     () =>
-      createSyncQueue((status, error) => {
+      createSyncQueue((status, failure) => {
         setSyncStatus(status);
-        setSyncError(error);
+        setSyncFailure(failure);
       }),
     [],
   );
+
+  useEffect(() => {
+    document.documentElement.lang = locale;
+  }, [locale]);
+
+  useEffect(() => {
+    applyTheme(themePref);
+    if (themePref !== "system") return;
+
+    const media = window.matchMedia("(prefers-color-scheme: dark)");
+    const onChange = () => applyTheme("system");
+    media.addEventListener("change", onChange);
+    return () => media.removeEventListener("change", onChange);
+  }, [themePref]);
 
   useEffect(() => {
     let isActive = true;
 
     async function boot() {
       void client.ping().catch(() => undefined);
+
+      // Erst nach der Hydration übernehmen, damit Server- und Client-HTML
+      // identisch starten (SSR rendert immer Deutsch).
+      await Promise.resolve();
+      if (!isActive) return;
+      setLocale(detectDeviceLocale());
 
       try {
         const user = await account.get();
@@ -133,16 +205,19 @@ export function RoteAgendaApp() {
     return () => {
       isActive = false;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function loadRemoteData(user: Models.User<Models.Preferences>) {
     try {
-      const remoteData = await loadAppDataForUser(user);
+      const remoteData = await loadAppDataForUser(user, detectDeviceLocale());
       setData(remoteData);
+      setLocale(remoteData.settings.locale);
+      storeDeviceLocale(remoteData.settings.locale);
       setDataError(null);
       setDataStatus("ready");
     } catch (error) {
-      setDataError(readErrorMessage(error));
+      setDataError(readErrorMessage(error, t));
       setDataStatus("error");
     }
   }
@@ -219,6 +294,7 @@ export function RoteAgendaApp() {
         note: trimmed,
         modelId: data.settings.aiModel,
         projects: data.projects,
+        locale,
       });
       setData((current) => ({
         ...current,
@@ -227,15 +303,24 @@ export function RoteAgendaApp() {
       }));
       setActiveSuggestions(result.suggestions);
       setCaptureText("");
-      persist("Rohnotiz", () => upsertItem("rawNotes", result.rawNote, userId));
+      persist(t("entity.rawNote"), () => upsertItem("rawNotes", result.rawNote, userId));
       for (const suggestion of result.suggestions) {
-        persist("KI-Vorschlag", () => upsertItem("suggestions", suggestion, userId));
+        persist(t("entity.suggestion"), () =>
+          upsertItem("suggestions", suggestion, userId),
+        );
       }
     } catch (error) {
-      setCaptureError(readErrorMessage(error));
+      setCaptureError(readErrorMessage(error, t));
     } finally {
       setIsProcessingNote(false);
     }
+  }
+
+  function appendCaptureText(transcript: string) {
+    setCaptureText((current) => {
+      const joined = current.trim() ? `${current.trimEnd()} ${transcript}` : transcript;
+      return joined.slice(0, MAX_NOTE_LENGTH);
+    });
   }
 
   function updateSuggestion(updated: AiSuggestion) {
@@ -248,7 +333,7 @@ export function RoteAgendaApp() {
         suggestion.id === updated.id ? updated : suggestion,
       ),
     }));
-    persist("KI-Vorschlag", () => upsertItem("suggestions", updated, userId));
+    persist(t("entity.suggestion"), () => upsertItem("suggestions", updated, userId));
   }
 
   function acceptSuggestion(suggestion: AiSuggestion, createdBy: "ai" | "user" = "ai") {
@@ -260,8 +345,8 @@ export function RoteAgendaApp() {
       projectId = `project-${Date.now().toString(36)}`;
       newProject = {
         id: projectId,
-        title: suggestion.suggestedNewProjectTitle ?? "Neues Projekt",
-        description: "Von Rote Agenda aus einer Rohnotiz vorgeschlagen.",
+        title: suggestion.suggestedNewProjectTitle ?? t("sugg.newProjectLabel"),
+        description: "",
         keywords: suggestion.suggestedTitle
           .toLowerCase()
           .split(/\s+/)
@@ -311,10 +396,12 @@ export function RoteAgendaApp() {
 
     if (newProject) {
       const projectToSave = newProject;
-      persist("Neues Projekt", () => upsertItem("projects", projectToSave, userId));
+      persist(t("entity.projectNew"), () => upsertItem("projects", projectToSave, userId));
     }
-    persist("Aufgabe", () => upsertItem("tasks", task, userId));
-    persist("KI-Vorschlag", () => upsertItem("suggestions", acceptedSuggestion, userId));
+    persist(t("entity.task"), () => upsertItem("tasks", task, userId));
+    persist(t("entity.suggestion"), () =>
+      upsertItem("suggestions", acceptedSuggestion, userId),
+    );
   }
 
   function rejectSuggestion(suggestionId: string) {
@@ -331,7 +418,7 @@ export function RoteAgendaApp() {
     setActiveSuggestions((current) =>
       current.map((suggestion) => (suggestion.id === suggestionId ? rejected : suggestion)),
     );
-    persist("KI-Vorschlag", () => upsertItem("suggestions", rejected, userId));
+    persist(t("entity.suggestion"), () => upsertItem("suggestions", rejected, userId));
   }
 
   function toggleTask(taskId: string) {
@@ -347,7 +434,7 @@ export function RoteAgendaApp() {
       ...current,
       tasks: current.tasks.map((task) => (task.id === taskId ? updated : task)),
     }));
-    persist("Aufgabe", () => upsertItem("tasks", updated, userId));
+    persist(t("entity.task"), () => upsertItem("tasks", updated, userId));
   }
 
   function saveTask(task: Task) {
@@ -363,7 +450,7 @@ export function RoteAgendaApp() {
     setSelectedTaskId(task.id);
     setSelectedProjectId(task.projectId);
     setEditingTask(null);
-    persist("Aufgabe", () => upsertItem("tasks", task, userId));
+    persist(t("entity.task"), () => upsertItem("tasks", task, userId));
   }
 
   function deleteTask(taskId: string) {
@@ -373,7 +460,7 @@ export function RoteAgendaApp() {
     }));
     setEditingTask(null);
     setScreen("today");
-    persist("Aufgabe löschen", () => deleteItem("tasks", taskId));
+    persist(t("entity.taskDelete"), () => deleteItem("tasks", taskId));
   }
 
   function toggleProjectAi(projectId: string) {
@@ -391,7 +478,7 @@ export function RoteAgendaApp() {
         project.id === projectId ? updated : project,
       ),
     }));
-    persist("Projekt", () => upsertItem("projects", updated, userId));
+    persist(t("entity.project"), () => upsertItem("projects", updated, userId));
   }
 
   function saveProject(project: Project) {
@@ -406,7 +493,7 @@ export function RoteAgendaApp() {
     });
     setSelectedProjectId(project.id);
     setEditingProject(null);
-    persist("Projekt", () => upsertItem("projects", project, userId));
+    persist(t("entity.project"), () => upsertItem("projects", project, userId));
   }
 
   function deleteProject(projectId: string) {
@@ -426,9 +513,9 @@ export function RoteAgendaApp() {
     setScreen("projects");
 
     for (const taskId of taskIdsToDelete) {
-      persist("Aufgabe löschen", () => deleteItem("tasks", taskId));
+      persist(t("entity.taskDelete"), () => deleteItem("tasks", taskId));
     }
-    persist("Projekt löschen", () => deleteItem("projects", projectId));
+    persist(t("entity.projectDelete"), () => deleteItem("projects", projectId));
   }
 
   function createBlankProject() {
@@ -474,7 +561,7 @@ export function RoteAgendaApp() {
     name: string;
   }) {
     setAuthError(null);
-    setAuthNotice(null);
+    setRecoverySent(false);
     setIsAuthSubmitting(true);
 
     try {
@@ -483,9 +570,7 @@ export function RoteAgendaApp() {
           email,
           url: `${window.location.origin}/reset-password`,
         });
-        setAuthNotice(
-          "E-Mail verschickt. Öffne den Link aus der Nachricht, um ein neues Passwort zu setzen.",
-        );
+        setRecoverySent(true);
         return;
       }
 
@@ -505,7 +590,7 @@ export function RoteAgendaApp() {
       setDataStatus("loading");
       await loadRemoteData(user);
     } catch (error) {
-      setAuthError(readErrorMessage(error));
+      setAuthError(readErrorMessage(error, t));
       setAuthStatus("signedOut");
     } finally {
       setIsAuthSubmitting(false);
@@ -522,7 +607,7 @@ export function RoteAgendaApp() {
     setAuthUser(null);
     setAuthStatus("signedOut");
     setDataStatus("idle");
-    setData(createEmptyAppData());
+    setData(createEmptyAppData(locale));
     setActiveSuggestions([]);
     setSelectedProjectId("");
     setSelectedTaskId("");
@@ -531,7 +616,7 @@ export function RoteAgendaApp() {
 
   function handleDeleteAllData() {
     setData((current) => ({
-      ...createEmptyAppData(),
+      ...createEmptyAppData(locale),
       user: current.user,
       settings: current.settings,
     }));
@@ -539,7 +624,7 @@ export function RoteAgendaApp() {
     setSelectedProjectId("");
     setSelectedTaskId("");
     setScreen("today");
-    persist("Alle Daten löschen", () => deleteAllUserData());
+    persist(t("entity.deleteAll"), () => deleteAllUserData());
   }
 
   function handleAiModelChange(aiModel: AiModelId) {
@@ -548,11 +633,27 @@ export function RoteAgendaApp() {
       ...current,
       settings,
     }));
-    persist("Einstellungen", () => saveSettings(settings));
+    persist(t("entity.settings"), () => saveSettings(settings));
+  }
+
+  function handleLocaleChange(nextLocale: Locale) {
+    setLocale(nextLocale);
+    storeDeviceLocale(nextLocale);
+
+    if (dataStatus === "ready") {
+      const settings = { ...data.settings, locale: nextLocale };
+      setData((current) => ({ ...current, settings }));
+      persist(translate(nextLocale, "entity.settings"), () => saveSettings(settings));
+    }
+  }
+
+  function handleThemeChange(preference: ThemePreference) {
+    setThemePref(preference);
+    storeTheme(preference);
   }
 
   if (authStatus === "loading") {
-    return <AppShellMessage title="Rote Agenda" text="Appwrite-Sitzung wird geprüft." />;
+    return <AppShellMessage title="Rote Agenda" text={t("boot.checkingSession")} />;
   }
 
   if (authStatus === "signedOut") {
@@ -560,12 +661,15 @@ export function RoteAgendaApp() {
       <AuthScreen
         mode={authMode}
         error={authError}
-        notice={authNotice}
+        notice={recoverySent ? t("auth.recoverySent") : null}
         isSubmitting={isAuthSubmitting}
+        locale={locale}
+        t={t}
+        onLocaleChange={handleLocaleChange}
         onModeChange={(mode) => {
           setAuthMode(mode);
           setAuthError(null);
-          setAuthNotice(null);
+          setRecoverySent(false);
         }}
         onSubmit={handleAuthSubmit}
       />
@@ -573,15 +677,15 @@ export function RoteAgendaApp() {
   }
 
   if (dataStatus === "loading") {
-    return <AppShellMessage title="Rote Agenda" text="Daten werden aus Appwrite geladen." />;
+    return <AppShellMessage title="Rote Agenda" text={t("boot.loadingData")} />;
   }
 
   if (dataStatus === "error") {
     return (
       <AppShellMessage
-        title="Appwrite Setup"
-        text={dataError ?? "Die Appwrite-Daten konnten nicht geladen werden."}
-        actionLabel="Abmelden"
+        title={t("boot.setupTitle")}
+        text={dataError ?? t("boot.loadErrorFallback")}
+        actionLabel={t("more.logout")}
         onAction={handleLogout}
       />
     );
@@ -589,7 +693,7 @@ export function RoteAgendaApp() {
 
   const screenContent = (() => {
     if (screen === "welcome") {
-      return <WelcomeScreen onStart={() => navigate("today")} />;
+      return <WelcomeScreen t={t} onStart={() => navigate("today")} />;
     }
 
     if (screen === "capture") {
@@ -602,8 +706,11 @@ export function RoteAgendaApp() {
           modelLabel={aiModelLabel(data.settings.aiModel)}
           error={captureError}
           isProcessing={isProcessingNote}
+          locale={locale}
+          t={t}
           onBack={() => navigate("today")}
           onChangeText={setCaptureText}
+          onAppendText={appendCaptureText}
           onProcess={handleProcessNote}
           onAccept={acceptSuggestion}
           onReject={rejectSuggestion}
@@ -619,6 +726,8 @@ export function RoteAgendaApp() {
           suggestions={pendingSuggestions}
           projects={data.projects}
           editingSuggestionId={editingSuggestionId}
+          locale={locale}
+          t={t}
           onEditSuggestion={setEditingSuggestionId}
           onUpdateSuggestion={updateSuggestion}
           onAccept={acceptSuggestion}
@@ -633,6 +742,8 @@ export function RoteAgendaApp() {
         <ProjectsScreen
           projects={data.projects}
           tasks={data.tasks}
+          locale={locale}
+          t={t}
           onOpenProject={openProject}
           onCreateProject={createBlankProject}
         />
@@ -646,6 +757,8 @@ export function RoteAgendaApp() {
           tasks={data.tasks.filter((task) => task.projectId === selectedProject.id)}
           notes={collectProjectNotes(data, selectedProject.id)}
           tab={projectTab}
+          locale={locale}
+          t={t}
           onBack={() => navigate("projects")}
           onTabChange={setProjectTab}
           onOpenTask={openTask}
@@ -667,6 +780,8 @@ export function RoteAgendaApp() {
             (suggestion) => suggestion.rawNoteId === selectedTask.sourceNoteId,
           )}
           tab={taskDetailTab}
+          locale={locale}
+          t={t}
           onBack={() => navigate("today")}
           onTabChange={setTaskDetailTab}
           onEdit={() => setEditingTask(selectedTask)}
@@ -682,8 +797,13 @@ export function RoteAgendaApp() {
           userName={authUser?.name || data.user.name}
           userEmail={authUser?.email || data.user.email}
           aiModel={data.settings.aiModel}
+          locale={locale}
+          themePref={themePref}
           syncStatus={syncStatus}
+          t={t}
           onAiModelChange={handleAiModelChange}
+          onLocaleChange={handleLocaleChange}
+          onThemeChange={handleThemeChange}
           onDeleteAll={handleDeleteAllData}
           onLogout={handleLogout}
         />
@@ -696,6 +816,8 @@ export function RoteAgendaApp() {
         projects={projectById}
         filter={taskFilter}
         aiStats={buildAiStats(data)}
+        locale={locale}
+        t={t}
         onFilterChange={setTaskFilter}
         onOpenTask={openTask}
         onToggleTask={toggleTask}
@@ -720,20 +842,23 @@ export function RoteAgendaApp() {
           <DesktopSidebar
             screen={screen}
             pendingCount={pendingSuggestions.length}
+            t={t}
             onNavigate={navigate}
           />
         ) : null}
 
         <WorkSurface hasBottomNav={screen !== "welcome"}>
-          {syncError ? (
-            <div className="mx-6 mt-4 flex items-start justify-between gap-3 rounded-[6px] border border-[var(--red)] bg-white/80 p-3 md:mx-8">
-              <p className="text-[12px] leading-5 text-[var(--red)]">{syncError}</p>
+          {syncFailure ? (
+            <div className="mx-6 mt-4 flex items-start justify-between gap-3 rounded-[6px] border border-[var(--red)] bg-[var(--surface-strong)] p-3 md:mx-8">
+              <p className="text-[12px] leading-5 text-[var(--red)]">
+                {t("sync.failed", { label: syncFailure.label, detail: syncFailure.detail })}
+              </p>
               <button
                 type="button"
                 onClick={() => syncQueue.retry()}
                 className="shrink-0 rounded-[4px] bg-[var(--red)] px-3 py-1.5 text-[11px] font-bold text-white"
               >
-                Erneut versuchen
+                {t("common.retry")}
               </button>
             </div>
           ) : null}
@@ -742,6 +867,7 @@ export function RoteAgendaApp() {
             <BottomNav
               screen={screen}
               pendingCount={pendingSuggestions.length}
+              t={t}
               onNavigate={navigate}
             />
           ) : null}
@@ -751,6 +877,7 @@ export function RoteAgendaApp() {
           <DesktopInsightPanel
             data={data}
             selectedProject={selectedProject}
+            t={t}
             onCapture={() => navigate("capture")}
             onOpenInbox={() => navigate("inbox")}
           />
@@ -761,6 +888,7 @@ export function RoteAgendaApp() {
         <TaskEditor
           task={editingTask}
           projects={data.projects}
+          t={t}
           onClose={() => setEditingTask(null)}
           onDelete={deleteTask}
           onSave={saveTask}
@@ -772,6 +900,7 @@ export function RoteAgendaApp() {
           project={editingProject}
           isNew={!data.projects.some((project) => project.id === editingProject.id)}
           taskCount={data.tasks.filter((task) => task.projectId === editingProject.id).length}
+          t={t}
           onClose={() => setEditingProject(null)}
           onDelete={deleteProject}
           onSave={saveProject}
@@ -870,6 +999,9 @@ function AuthScreen({
   error,
   notice,
   isSubmitting,
+  locale,
+  t,
+  onLocaleChange,
   onModeChange,
   onSubmit,
 }: {
@@ -877,6 +1009,9 @@ function AuthScreen({
   error: string | null;
   notice: string | null;
   isSubmitting: boolean;
+  locale: Locale;
+  t: Translator;
+  onLocaleChange: (locale: Locale) => void;
   onModeChange: (mode: AuthMode) => void;
   onSubmit: (credentials: { email: string; password: string; name: string }) => void;
 }) {
@@ -887,26 +1022,29 @@ function AuthScreen({
   const isRecover = mode === "recover";
 
   const title = isRecover
-    ? "Passwort zurücksetzen"
+    ? t("auth.title.recover")
     : isRegister
-      ? "Account erstellen"
-      : "Anmelden";
+      ? t("auth.title.register")
+      : t("auth.title.login");
   const submitLabel = isRecover
-    ? "Link anfordern"
+    ? t("auth.submit.recover")
     : isRegister
-      ? "Registrieren"
-      : "Anmelden";
+      ? t("auth.submit.register")
+      : t("auth.submit.login");
 
   return (
     <main className="grid min-h-screen place-items-center bg-[var(--paper)] px-6 text-[var(--ink)]">
       <section className="w-full max-w-[430px] rounded-[8px] border border-[var(--line)] bg-[var(--paper-soft)] p-7 shadow-sm">
-        <p className="text-[11px] font-extrabold uppercase tracking-[0.05em] text-[var(--red)]">
-          Rote Agenda
-        </p>
+        <div className="flex items-start justify-between">
+          <p className="text-[11px] font-extrabold uppercase tracking-[0.05em] text-[var(--red)]">
+            Rote Agenda
+          </p>
+          <LocaleSwitch locale={locale} onChange={onLocaleChange} />
+        </div>
         <h1 className="mt-3 font-display text-[34px] font-bold">{title}</h1>
         {isRecover ? (
           <p className="mt-3 text-[13px] leading-6 text-[var(--muted)]">
-            Wir schicken dir einen Link, mit dem du ein neues Passwort setzen kannst.
+            {t("auth.recoverHint")}
           </p>
         ) : null}
         <form
@@ -917,42 +1055,42 @@ function AuthScreen({
           }}
         >
           {isRegister ? (
-            <Field label="Name">
+            <Field label={t("auth.name")}>
               <input
                 value={name}
                 onChange={(event) => setName(event.target.value)}
-                className="h-11 w-full rounded-[5px] border border-[var(--line)] bg-white px-3 text-[13px] outline-none"
+                className="h-11 w-full rounded-[5px] border border-[var(--line)] bg-[var(--field)] px-3 text-[13px] outline-none"
               />
             </Field>
           ) : null}
-          <Field label="E-Mail">
+          <Field label={t("auth.email")}>
             <input
               type="email"
               value={email}
               onChange={(event) => setEmail(event.target.value)}
-              className="h-11 w-full rounded-[5px] border border-[var(--line)] bg-white px-3 text-[13px] outline-none"
+              className="h-11 w-full rounded-[5px] border border-[var(--line)] bg-[var(--field)] px-3 text-[13px] outline-none"
               required
             />
           </Field>
           {!isRecover ? (
-            <Field label="Passwort">
+            <Field label={t("auth.password")}>
               <input
                 type="password"
                 value={password}
                 onChange={(event) => setPassword(event.target.value)}
-                className="h-11 w-full rounded-[5px] border border-[var(--line)] bg-white px-3 text-[13px] outline-none"
+                className="h-11 w-full rounded-[5px] border border-[var(--line)] bg-[var(--field)] px-3 text-[13px] outline-none"
                 minLength={8}
                 required
               />
             </Field>
           ) : null}
           {error ? (
-            <p className="rounded-[5px] border border-[var(--red)] bg-white/70 p-3 text-[12px] leading-5 text-[var(--red)]">
+            <p className="rounded-[5px] border border-[var(--red)] bg-[var(--surface-strong)] p-3 text-[12px] leading-5 text-[var(--red)]">
               {error}
             </p>
           ) : null}
           {notice ? (
-            <p className="rounded-[5px] border border-[var(--line-strong)] bg-white/70 p-3 text-[12px] leading-5 text-[var(--ink-soft)]">
+            <p className="rounded-[5px] border border-[var(--line-strong)] bg-[var(--surface-strong)] p-3 text-[12px] leading-5 text-[var(--ink-soft)]">
               {notice}
             </p>
           ) : null}
@@ -961,7 +1099,7 @@ function AuthScreen({
             disabled={isSubmitting}
             className="flex h-12 w-full items-center justify-center rounded-[5px] bg-[var(--red)] px-4 text-[13px] font-bold text-white disabled:opacity-50"
           >
-            {isSubmitting ? "Bitte warten..." : submitLabel}
+            {isSubmitting ? t("common.pleaseWait") : submitLabel}
           </button>
         </form>
         <div className="mt-5 flex flex-col items-start gap-2">
@@ -972,14 +1110,14 @@ function AuthScreen({
                 onClick={() => onModeChange("register")}
                 className="text-[12px] font-bold underline underline-offset-2"
               >
-                Noch kein Account? Registrieren
+                {t("auth.toRegister")}
               </button>
               <button
                 type="button"
                 onClick={() => onModeChange("recover")}
                 className="text-[12px] font-bold underline underline-offset-2"
               >
-                Passwort vergessen?
+                {t("auth.toRecover")}
               </button>
             </>
           ) : (
@@ -988,35 +1126,63 @@ function AuthScreen({
               onClick={() => onModeChange("login")}
               className="text-[12px] font-bold underline underline-offset-2"
             >
-              {isRegister ? "Schon registriert? Anmelden" : "Zurück zur Anmeldung"}
+              {isRegister ? t("auth.backToLogin.register") : t("auth.backToLogin.recover")}
             </button>
           )}
         </div>
-        <LegalLinks className="mt-6" />
+        <LegalLinks t={t} className="mt-6" />
       </section>
     </main>
   );
 }
 
-function LegalLinks({ className }: { className?: string }) {
+function LocaleSwitch({
+  locale,
+  onChange,
+}: {
+  locale: Locale;
+  onChange: (locale: Locale) => void;
+}) {
+  return (
+    <div className="flex gap-1 text-[11px] font-bold">
+      {(["de", "en"] as const).map((option) => (
+        <button
+          key={option}
+          type="button"
+          onClick={() => onChange(option)}
+          className={cx(
+            "rounded-[4px] px-2 py-1 uppercase",
+            locale === option
+              ? "bg-[var(--green)] text-white"
+              : "text-[var(--muted)] hover:bg-[var(--surface-strong)]",
+          )}
+        >
+          {option}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function LegalLinks({ t, className }: { t: Translator; className?: string }) {
   return (
     <p className={cx("flex gap-4 text-[11px] text-[var(--muted)]", className)}>
       <Link href="/impressum" className="underline underline-offset-2">
-        Impressum
+        {t("legal.impressum")}
       </Link>
       <Link href="/datenschutz" className="underline underline-offset-2">
-        Datenschutz
+        {t("legal.datenschutz")}
       </Link>
     </p>
   );
 }
 
-function WelcomeScreen({ onStart }: { onStart: () => void }) {
+function WelcomeScreen({ t, onStart }: { t: Translator; onStart: () => void }) {
   return (
     <div className="relative flex flex-1 overflow-hidden md:min-h-[calc(100vh-48px)]">
       <Image
         src="/welcome-movement.png"
-        alt="Bewegungssilhouette mit roter Flagge"
+        alt={t("welcome.imageAlt")}
         fill
         priority
         sizes="(max-width: 768px) 100vw, 62vw"
@@ -1025,22 +1191,20 @@ function WelcomeScreen({ onStart }: { onStart: () => void }) {
       <div className="relative z-10 flex flex-1 flex-col px-8 pb-8 pt-[18vh] md:ml-[48%] md:max-w-[620px] md:px-12 md:pb-12 md:pt-24 lg:pt-32">
         <div className="ml-[35%] max-w-[230px] md:ml-0 md:max-w-none">
           <p className="hidden text-[12px] font-extrabold uppercase tracking-[0.08em] text-[var(--red)] md:block">
-            Webbasiertes Capture-Tool
+            {t("welcome.kicker")}
           </p>
           <h1 className="font-display text-[42px] font-bold leading-[1.05] tracking-[-0.02em] text-[var(--green)] md:mt-4 md:text-[64px] lg:text-[72px]">
             Rote Agenda
           </h1>
           <p className="mt-6 font-display text-[17px] font-bold leading-7 text-[var(--ink)] md:max-w-[430px] md:text-[23px] md:leading-9">
-            Der rote Faden für deine Projekte.
+            {t("welcome.tagline")}
           </p>
           <div className="mt-8 h-0.5 w-10 bg-[var(--red)]" />
           <p className="mt-6 max-w-[210px] font-display text-[14px] italic leading-6 text-[var(--ink-soft)] md:max-w-[470px] md:text-[16px] md:leading-8">
-            Organisiere Gedanken. Strukturiere Projekte. Verändere die Welt.
+            {t("welcome.motto")}
           </p>
           <p className="mt-5 hidden max-w-[500px] text-[14px] leading-7 text-[var(--muted)] md:block">
-            Zuerst als schnelles Webtool gedacht: am Handy sofort erfassen,
-            am Desktop Aufgaben, Projekte und KI-Vorschläge bequem prüfen.
-            Die Oberfläche bleibt später gut als Android-App adaptierbar.
+            {t("welcome.desc")}
           </p>
         </div>
 
@@ -1050,10 +1214,13 @@ function WelcomeScreen({ onStart }: { onStart: () => void }) {
             onClick={onStart}
             className="flex h-15 w-full items-center justify-between rounded-[6px] border border-white/70 bg-[var(--green)] px-8 font-display text-[16px] font-bold text-[var(--cream)] shadow-lg shadow-black/10 transition hover:bg-[var(--green-2)]"
           >
-            <span>Los geht&apos;s</span>
+            <span>{t("welcome.start")}</span>
             <ChevronRight className="h-5 w-5" />
           </button>
-          <LegalLinks className="justify-center text-[var(--cream)] md:justify-start md:text-[var(--muted)]" />
+          <LegalLinks
+            t={t}
+            className="justify-center text-[var(--cream)] md:justify-start md:text-[var(--muted)]"
+          />
         </div>
       </div>
     </div>
@@ -1065,6 +1232,8 @@ function TodayScreen({
   projects,
   filter,
   aiStats,
+  locale,
+  t,
   onFilterChange,
   onOpenTask,
   onToggleTask,
@@ -1076,6 +1245,8 @@ function TodayScreen({
   projects: Map<string, Project>;
   filter: TaskFilter;
   aiStats: AiStats;
+  locale: Locale;
+  t: Translator;
   onFilterChange: (filter: TaskFilter) => void;
   onOpenTask: (taskId: string) => void;
   onToggleTask: (taskId: string) => void;
@@ -1088,11 +1259,11 @@ function TodayScreen({
   return (
     <div className="flex flex-1 flex-col px-6 pt-3 md:px-8 md:pt-8 lg:px-10">
       <ScreenHeader
-        title="Heute"
+        title={t("today.title")}
         leftIcon={<Menu className="h-6 w-6" />}
         rightIcon={<Bell className="h-5 w-5" />}
-        leftLabel="Mehr öffnen"
-        rightLabel="Inbox öffnen"
+        leftLabel={t("today.openMore")}
+        rightLabel={t("today.openInbox")}
         onLeft={onOpenMore}
         onRight={onOpenInbox}
       />
@@ -1102,7 +1273,7 @@ function TodayScreen({
         onClick={onCapture}
         className="mt-6 flex h-[68px] items-center justify-between rounded-[6px] bg-[var(--green)] p-3 pl-5 text-left text-[14px] font-medium text-white shadow-md shadow-black/10"
       >
-        <span>Was beschäftigt dich?</span>
+        <span>{t("today.capturePrompt")}</span>
         <span className="grid h-11 w-11 place-items-center rounded-[4px] bg-[var(--red)]">
           <Plus className="h-6 w-6" />
         </span>
@@ -1112,38 +1283,42 @@ function TodayScreen({
         <button
           type="button"
           onClick={onOpenInbox}
-          className="mt-5 w-full rounded-[5px] border border-[var(--line)] bg-white/50 p-4 text-left shadow-sm transition hover:bg-white/70"
+          className="mt-5 w-full rounded-[5px] border border-[var(--line)] bg-[var(--surface)] p-4 text-left shadow-sm transition hover:bg-[var(--surface-strong)]"
         >
           <div className="flex items-center justify-between gap-4">
             <div className="flex items-center gap-2 text-[11px] font-extrabold uppercase tracking-[0.03em]">
               <Sparkles className="h-4 w-4 text-[var(--green)]" />
-              KI-Update
+              {t("today.aiUpdate")}
             </div>
             <ChevronRight className="h-5 w-5" />
           </div>
           <p className="mt-4 text-[13px] font-bold">
-            {aiStats.processedNotes}{" "}
-            {aiStats.processedNotes === 1 ? "Notiz" : "Notizen"} verarbeitet
+            {t(
+              aiStats.processedNotes === 1
+                ? "today.notesProcessed.one"
+                : "today.notesProcessed.many",
+              { count: aiStats.processedNotes },
+            )}
           </p>
           <div className="mt-4 grid grid-cols-2 gap-2 text-[11px] font-semibold">
-            <span>{aiStats.acceptedCount} übernommen</span>
-            <span>{aiStats.pendingCount} zu prüfen</span>
+            <span>{t("today.accepted", { count: aiStats.acceptedCount })}</span>
+            <span>{t("today.toReview", { count: aiStats.pendingCount })}</span>
           </div>
         </button>
       ) : null}
 
       <div className="mt-9 flex items-end justify-between">
-        <h2 className="font-display text-[20px] font-bold">Meine Aufgaben</h2>
+        <h2 className="font-display text-[20px] font-bold">{t("today.myTasks")}</h2>
         <button
           type="button"
           onClick={() => onFilterChange("all")}
           className="text-[12px] font-semibold underline underline-offset-2"
         >
-          Alle anzeigen
+          {t("today.showAll")}
         </button>
       </div>
 
-      <TaskTabs value={filter} onChange={onFilterChange} />
+      <TaskTabs value={filter} t={t} onChange={onFilterChange} />
 
       <div className="mt-3 divide-y divide-[var(--line)]">
         {tasks.length ? (
@@ -1152,16 +1327,17 @@ function TodayScreen({
               key={task.id}
               task={task}
               project={projects.get(task.projectId)}
+              locale={locale}
+              t={t}
               onOpen={() => onOpenTask(task.id)}
               onToggle={() => onToggleTask(task.id)}
             />
           ))
         ) : isBrandNew ? (
           <div className="mt-6 rounded-[7px] border border-dashed border-[var(--line-strong)] p-5">
-            <p className="font-display text-[18px] font-bold">Willkommen bei Rote Agenda</p>
+            <p className="font-display text-[18px] font-bold">{t("today.welcomeTitle")}</p>
             <p className="mt-2 text-[13px] leading-6 text-[var(--muted)]">
-              Halte einfach fest, was dich beschäftigt. Die KI macht daraus
-              Aufgabenvorschläge, die du prüfst und übernimmst.
+              {t("today.welcomeText")}
             </p>
             <button
               type="button"
@@ -1169,14 +1345,11 @@ function TodayScreen({
               className="mt-4 flex items-center gap-2 rounded-[5px] bg-[var(--red)] px-4 py-3 text-[13px] font-bold text-white"
             >
               <Plus className="h-4 w-4" />
-              Erste Notiz erfassen
+              {t("today.captureFirst")}
             </button>
           </div>
         ) : (
-          <EmptyState
-            title="Keine Aufgaben in dieser Ansicht"
-            text="Alles ruhig. Neue Rohnotizen landen zuerst im Capture."
-          />
+          <EmptyState title={t("today.emptyTitle")} text={t("today.emptyText")} />
         )}
       </div>
     </div>
@@ -1191,8 +1364,11 @@ function CaptureScreen({
   modelLabel,
   error,
   isProcessing,
+  locale,
+  t,
   onBack,
   onChangeText,
+  onAppendText,
   onProcess,
   onAccept,
   onReject,
@@ -1206,32 +1382,132 @@ function CaptureScreen({
   modelLabel: string;
   error: string | null;
   isProcessing: boolean;
+  locale: Locale;
+  t: Translator;
   onBack: () => void;
   onChangeText: (value: string) => void;
+  onAppendText: (value: string) => void;
   onProcess: () => void;
   onAccept: (suggestion: AiSuggestion, createdBy?: "ai" | "user") => void;
   onReject: (suggestionId: string) => void;
   onEditSuggestion: (suggestionId: string | null) => void;
   onUpdateSuggestion: (suggestion: AiSuggestion) => void;
 }) {
+  const [isRecording, setIsRecording] = useState(false);
+  // Der Capture-Screen wird nie serverseitig gerendert,
+  // daher ist die direkte Browser-Erkennung hydration-sicher.
+  const [isMicSupported] = useState(() => Boolean(getSpeechRecognitionCtor()));
+  const [micError, setMicError] = useState<string | null>(null);
+  const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
+
+  useEffect(() => {
+    return () => {
+      recognitionRef.current?.stop();
+      recognitionRef.current = null;
+    };
+  }, []);
+
+  function stopRecording() {
+    recognitionRef.current?.stop();
+    recognitionRef.current = null;
+    setIsRecording(false);
+  }
+
+  function toggleRecording() {
+    if (isRecording) {
+      stopRecording();
+      return;
+    }
+
+    const RecognitionCtor = getSpeechRecognitionCtor();
+    if (!RecognitionCtor) return;
+
+    setMicError(null);
+    const recognition = new RecognitionCtor();
+    recognition.lang = locale === "de" ? "de-DE" : "en-US";
+    recognition.continuous = true;
+    recognition.interimResults = false;
+    recognition.onresult = (event) => {
+      const transcripts: string[] = [];
+      for (let index = event.resultIndex; index < event.results.length; index++) {
+        const result = event.results[index];
+        if (result.isFinal) {
+          const transcript = result[0]?.transcript.trim();
+          if (transcript) transcripts.push(transcript);
+        }
+      }
+      if (transcripts.length) onAppendText(transcripts.join(" "));
+    };
+    recognition.onerror = (event) => {
+      setMicError(
+        t(
+          event.error === "not-allowed" || event.error === "service-not-allowed"
+            ? "capture.mic.denied"
+            : "capture.mic.error",
+        ),
+      );
+      recognitionRef.current = null;
+      setIsRecording(false);
+    };
+    recognition.onend = () => {
+      recognitionRef.current = null;
+      setIsRecording(false);
+    };
+
+    recognitionRef.current = recognition;
+    setIsRecording(true);
+    try {
+      recognition.start();
+    } catch {
+      recognitionRef.current = null;
+      setIsRecording(false);
+      setMicError(t("capture.mic.error"));
+    }
+  }
+
   return (
     <div className="flex flex-1 flex-col px-6 pt-3 md:px-8 md:pt-8 lg:px-10">
       <ScreenHeader
-        title="Schnellnotiz"
+        title={t("capture.title")}
         leftIcon={<ArrowLeft className="h-5 w-5" />}
-        leftLabel="Zurück"
+        leftLabel={t("common.back")}
         onLeft={onBack}
         rightIcon={<Sparkles className="h-5 w-5" />}
       />
 
-      <div className="mt-8 rounded-[7px] border border-[var(--line)] bg-white/55 p-4">
+      <div className="mt-8 rounded-[7px] border border-[var(--line)] bg-[var(--surface)] p-4">
         <textarea
           value={captureText}
           onChange={(event) => onChangeText(event.target.value)}
           maxLength={MAX_NOTE_LENGTH}
-          placeholder="Schreib einfach alles rein – Gedanken, Aufgaben, Notizen, Gesprächsfetzen…"
+          placeholder={t("capture.placeholder")}
           className="min-h-44 w-full resize-none bg-transparent text-[16px] leading-7 outline-none placeholder:text-[var(--muted)]"
         />
+        {isMicSupported ? (
+          <div className="mt-2 flex items-center gap-3">
+            <button
+              type="button"
+              onClick={toggleRecording}
+              aria-label={isRecording ? t("capture.mic.stop") : t("capture.mic.start")}
+              className={cx(
+                "grid h-11 w-11 shrink-0 place-items-center rounded-full transition",
+                isRecording
+                  ? "mic-recording bg-[var(--red)] text-white"
+                  : "border border-[var(--line-strong)] text-[var(--ink)] hover:bg-[var(--surface-strong)]",
+              )}
+            >
+              <Mic className="h-5 w-5" />
+            </button>
+            <span className="text-[12px] leading-5 text-[var(--muted)]">
+              {isRecording ? t("capture.mic.listening") : t("capture.mic.start")}
+            </span>
+          </div>
+        ) : null}
+        {micError ? (
+          <p className="mt-3 rounded-[5px] border border-[var(--line-strong)] bg-[var(--surface-strong)] p-3 text-[12px] leading-5 text-[var(--muted)]">
+            {micError}
+          </p>
+        ) : null}
         <button
           type="button"
           onClick={onProcess}
@@ -1239,10 +1515,10 @@ function CaptureScreen({
           className="mt-4 flex h-13 w-full items-center justify-center gap-2 rounded-[5px] bg-[var(--red)] px-5 text-[14px] font-bold text-white shadow-sm transition hover:bg-[var(--red-dark)] disabled:opacity-50"
         >
           <Sparkles className="h-4 w-4" />
-          {isProcessing ? "KI verarbeitet..." : `Mit ${modelLabel} verarbeiten`}
+          {isProcessing ? t("capture.processing") : t("capture.process", { model: modelLabel })}
         </button>
         {error ? (
-          <p className="mt-3 rounded-[5px] border border-[var(--red)] bg-white/70 p-3 text-[12px] leading-5 text-[var(--red)]">
+          <p className="mt-3 rounded-[5px] border border-[var(--red)] bg-[var(--surface-strong)] p-3 text-[12px] leading-5 text-[var(--red)]">
             {error}
           </p>
         ) : null}
@@ -1256,6 +1532,8 @@ function CaptureScreen({
               suggestion={suggestion}
               projects={projects}
               isEditing={editingSuggestionId === suggestion.id}
+              locale={locale}
+              t={t}
               onAccept={() => onAccept(suggestion)}
               onCreateTask={() => onAccept(suggestion, "user")}
               onReject={() => onReject(suggestion.id)}
@@ -1269,8 +1547,7 @@ function CaptureScreen({
           ))
         ) : (
           <div className="rounded-[7px] border border-dashed border-[var(--line-strong)] p-5 text-[13px] leading-6 text-[var(--muted)]">
-            Beispiele: „Chef meinte, ich soll bis Freitag nochmal die Präsentation
-            überarbeiten“ oder „Idee: Register-Fälle automatisch clustern“.
+            {t("capture.examples")}
           </div>
         )}
       </div>
@@ -1282,6 +1559,8 @@ function InboxScreen({
   suggestions,
   projects,
   editingSuggestionId,
+  locale,
+  t,
   onEditSuggestion,
   onUpdateSuggestion,
   onAccept,
@@ -1291,6 +1570,8 @@ function InboxScreen({
   suggestions: AiSuggestion[];
   projects: Project[];
   editingSuggestionId: string | null;
+  locale: Locale;
+  t: Translator;
   onEditSuggestion: (suggestionId: string | null) => void;
   onUpdateSuggestion: (suggestion: AiSuggestion) => void;
   onAccept: (suggestion: AiSuggestion, createdBy?: "ai" | "user") => void;
@@ -1300,15 +1581,13 @@ function InboxScreen({
   return (
     <div className="flex flex-1 flex-col px-6 pt-3 md:px-8 md:pt-8 lg:px-10">
       <ScreenHeader
-        title="Inbox"
+        title={t("inbox.title")}
         leftIcon={<Inbox className="h-5 w-5" />}
         rightIcon={<MoreHorizontal className="h-5 w-5" />}
-        rightLabel="Mehr öffnen"
+        rightLabel={t("today.openMore")}
         onRight={onOpenMore}
       />
-      <p className="mt-5 text-[13px] leading-6 text-[var(--muted)]">
-        Ungeprüfte KI-Vorschläge bleiben hier, bis du sie annimmst, änderst oder ablehnst.
-      </p>
+      <p className="mt-5 text-[13px] leading-6 text-[var(--muted)]">{t("inbox.hint")}</p>
 
       <div className="mt-6 space-y-4">
         {suggestions.length ? (
@@ -1319,6 +1598,8 @@ function InboxScreen({
               projects={projects}
               isEditing={editingSuggestionId === suggestion.id}
               compact
+              locale={locale}
+              t={t}
               onAccept={() => onAccept(suggestion)}
               onCreateTask={() => onAccept(suggestion, "user")}
               onReject={() => onReject(suggestion.id)}
@@ -1331,7 +1612,7 @@ function InboxScreen({
             />
           ))
         ) : (
-          <EmptyState title="Inbox ist leer" text="Alle Vorschläge sind geprüft." />
+          <EmptyState title={t("inbox.emptyTitle")} text={t("inbox.emptyText")} />
         )}
       </div>
     </div>
@@ -1341,29 +1622,32 @@ function InboxScreen({
 function ProjectsScreen({
   projects,
   tasks,
+  locale,
+  t,
   onOpenProject,
   onCreateProject,
 }: {
   projects: Project[];
   tasks: Task[];
+  locale: Locale;
+  t: Translator;
   onOpenProject: (projectId: string) => void;
   onCreateProject: () => void;
 }) {
   return (
     <div className="flex flex-1 flex-col px-6 pt-3 md:px-8 md:pt-8 lg:px-10">
       <ScreenHeader
-        title="Projekte"
+        title={t("projects.title")}
         leftIcon={<FolderKanban className="h-5 w-5" />}
         rightIcon={<Plus className="h-5 w-5" />}
-        rightLabel="Neues Projekt anlegen"
+        rightLabel={t("projects.new")}
         onRight={onCreateProject}
       />
       {!projects.length ? (
         <div className="mt-6 rounded-[7px] border border-dashed border-[var(--line-strong)] p-5">
-          <p className="font-display text-[18px] font-bold">Noch keine Projekte</p>
+          <p className="font-display text-[18px] font-bold">{t("projects.emptyTitle")}</p>
           <p className="mt-2 text-[13px] leading-6 text-[var(--muted)]">
-            Projekte bündeln deine Aufgaben. Die KI schlägt bei neuen Notizen
-            automatisch passende Projekte vor – oder du legst selbst eins an.
+            {t("projects.emptyText")}
           </p>
           <button
             type="button"
@@ -1371,7 +1655,7 @@ function ProjectsScreen({
             className="mt-4 flex items-center gap-2 rounded-[5px] bg-[var(--red)] px-4 py-3 text-[13px] font-bold text-white"
           >
             <Plus className="h-4 w-4" />
-            Projekt anlegen
+            {t("projects.create")}
           </button>
         </div>
       ) : null}
@@ -1390,7 +1674,7 @@ function ProjectsScreen({
               type="button"
               key={project.id}
               onClick={() => onOpenProject(project.id)}
-              className="w-full rounded-[7px] border border-[var(--line)] bg-white/45 p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:bg-white/70"
+              className="w-full rounded-[7px] border border-[var(--line)] bg-[var(--surface)] p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:bg-[var(--surface-strong)]"
             >
               <div className="flex items-start justify-between gap-3">
                 <div>
@@ -1404,8 +1688,10 @@ function ProjectsScreen({
                 <ChevronRight className="mt-1 h-5 w-5 shrink-0" />
               </div>
               <div className="mt-4 flex items-center justify-between text-[12px] font-semibold">
-                <span>{openTasks} offen</span>
-                <span>{nextDeadline ? formatDateLabel(nextDeadline) : "Ohne Deadline"}</span>
+                <span>{t("projects.openCount", { count: openTasks })}</span>
+                <span>
+                  {nextDeadline ? formatDateLabel(nextDeadline, locale) : t("projects.noDeadline")}
+                </span>
               </div>
               <ProgressBar value={progress} className="mt-3" />
             </button>
@@ -1421,6 +1707,8 @@ function ProjectDetailScreen({
   tasks,
   notes,
   tab,
+  locale,
+  t,
   onBack,
   onTabChange,
   onOpenTask,
@@ -1433,6 +1721,8 @@ function ProjectDetailScreen({
   tasks: Task[];
   notes: RawNote[];
   tab: ProjectDetailTab;
+  locale: Locale;
+  t: Translator;
   onBack: () => void;
   onTabChange: (tab: ProjectDetailTab) => void;
   onOpenTask: (taskId: string) => void;
@@ -1450,19 +1740,19 @@ function ProjectDetailScreen({
           title=""
           leftIcon={<ArrowLeft className="h-5 w-5" />}
           rightIcon={<Edit3 className="h-5 w-5" />}
-          leftLabel="Zurück"
-          rightLabel="Projekt bearbeiten"
+          leftLabel={t("common.back")}
+          rightLabel={t("project.edit")}
           onLeft={onBack}
           onRight={onEdit}
         />
         <p className="mt-8 text-[11px] font-extrabold uppercase tracking-[0.05em] text-[var(--red)]">
-          Projekt
+          {t("project.kicker")}
         </p>
         <h1 className="mt-4 font-display text-[29px] font-bold leading-tight">
           {project.title}
         </h1>
         <div className="mt-8 flex items-center justify-between text-[13px]">
-          <span>Fortschritt</span>
+          <span>{t("project.progress")}</span>
           <span>{progress}%</span>
         </div>
         <ProgressBar value={progress} className="mt-3" />
@@ -1472,7 +1762,11 @@ function ProjectDetailScreen({
         value={tab}
         onChange={(value) => onTabChange(value as ProjectDetailTab)}
         tabs={["tasks", "details", "notes"]}
-        labels={{ tasks: "Aufgaben", details: "Details", notes: "Notizen" }}
+        labels={{
+          tasks: t("project.tab.tasks"),
+          details: t("project.tab.details"),
+          notes: t("project.tab.notes"),
+        }}
       />
 
       <div className="px-6 md:px-8 lg:px-10">
@@ -1482,6 +1776,7 @@ function ProjectDetailScreen({
               <TaskLine
                 key={task.id}
                 task={task}
+                locale={locale}
                 onOpen={() => onOpenTask(task.id)}
                 onToggle={() => onToggleTask(task.id)}
               />
@@ -1492,7 +1787,7 @@ function ProjectDetailScreen({
               className="mt-7 flex items-center gap-3 text-[14px] font-semibold text-[var(--red)]"
             >
               <Plus className="h-4 w-4" />
-              Aufgabe hinzufügen
+              {t("project.addTask")}
             </button>
           </div>
         ) : null}
@@ -1505,12 +1800,12 @@ function ProjectDetailScreen({
             <button
               type="button"
               onClick={onToggleAi}
-              className="flex w-full items-center justify-between rounded-[6px] border border-[var(--line)] bg-white/45 p-4 text-left"
+              className="flex w-full items-center justify-between rounded-[6px] border border-[var(--line)] bg-[var(--surface)] p-4 text-left"
             >
               <span>
-                <span className="block text-[13px] font-bold">KI-Zuordnung</span>
+                <span className="block text-[13px] font-bold">{t("project.aiToggle")}</span>
                 <span className="text-[12px] text-[var(--muted)]">
-                  Für dieses Projekt {project.aiEnabled ? "aktiv" : "pausiert"}
+                  {project.aiEnabled ? t("project.aiActive") : t("project.aiPaused")}
                 </span>
               </span>
               <span
@@ -1529,7 +1824,7 @@ function ProjectDetailScreen({
             </button>
             <div>
               <p className="text-[12px] font-bold uppercase tracking-[0.04em] text-[var(--muted)]">
-                Keywords
+                {t("project.keywords")}
               </p>
               <div className="mt-3 flex flex-wrap gap-2">
                 {project.keywords.map((keyword) => (
@@ -1551,21 +1846,22 @@ function ProjectDetailScreen({
               {notes.map((note) => (
                 <div
                   key={note.id}
-                  className="rounded-[6px] border border-[var(--line)] bg-white/45 p-4"
+                  className="rounded-[6px] border border-[var(--line)] bg-[var(--surface)] p-4"
                 >
                   <p className="text-[13px] leading-6 text-[var(--ink-soft)]">
                     {note.content}
                   </p>
                   <p className="mt-2 text-[11px] font-semibold uppercase tracking-[0.04em] text-[var(--muted)]">
-                    Rohnotiz · {formatDateLabel(note.createdAt.slice(0, 10))}
+                    {t("project.noteMeta", {
+                      date: formatDateLabel(note.createdAt.slice(0, 10), locale),
+                    })}
                   </p>
                 </div>
               ))}
             </div>
           ) : (
             <div className="pt-5 text-[14px] leading-7 text-[var(--muted)]">
-              Noch keine Rohnotizen zu diesem Projekt. Sobald die KI Notizen
-              hierher zuordnet, erscheinen sie in dieser Liste.
+              {t("project.notesEmpty")}
             </div>
           )
         ) : null}
@@ -1580,6 +1876,8 @@ function TaskDetailScreen({
   rawNote,
   suggestion,
   tab,
+  locale,
+  t,
   onBack,
   onTabChange,
   onEdit,
@@ -1591,6 +1889,8 @@ function TaskDetailScreen({
   rawNote?: { content: string } | undefined;
   suggestion?: AiSuggestion | undefined;
   tab: TaskDetailTab;
+  locale: Locale;
+  t: Translator;
   onBack: () => void;
   onTabChange: (tab: TaskDetailTab) => void;
   onEdit: () => void;
@@ -1604,41 +1904,47 @@ function TaskDetailScreen({
           title=""
           leftIcon={<ArrowLeft className="h-5 w-5" />}
           rightIcon={<Edit3 className="h-5 w-5" />}
-          leftLabel="Zurück"
-          rightLabel="Aufgabe bearbeiten"
+          leftLabel={t("common.back")}
+          rightLabel={t("task.edit")}
           onLeft={onBack}
           onRight={onEdit}
         />
         <p className="mt-8 text-[11px] font-extrabold uppercase tracking-[0.05em] text-[var(--red)]">
-          {project?.title ?? "Aufgabe"}
+          {project?.title ?? t("task.fallbackKicker")}
         </p>
         <h1 className="mt-4 font-display text-[29px] font-bold leading-tight">
           {task.title}
         </h1>
         <div className="mt-7 grid grid-cols-2 gap-3 text-[12px]">
-          <InfoTile label="Status" value={statusLabels[task.status]} />
-          <InfoTile label="Deadline" value={formatDateLabel(task.dueDate)} />
-          <InfoTile label="Priorität" value={priorityLabels[task.priority]} />
+          <InfoTile label={t("task.status")} value={t(statusKeys[task.status])} />
+          <InfoTile label={t("task.deadline")} value={formatDateLabel(task.dueDate, locale)} />
+          <InfoTile label={t("task.priority")} value={t(priorityKeys[task.priority])} />
           <button
             type="button"
             onClick={onOpenProject}
-            className="rounded-[6px] border border-[var(--line)] bg-white/45 p-3 text-left"
+            className="rounded-[6px] border border-[var(--line)] bg-[var(--surface)] p-3 text-left"
           >
             <span className="block text-[10px] font-bold uppercase tracking-[0.05em] text-[var(--muted)]">
-              Projekt
+              {t("task.project")}
             </span>
-            <span className="mt-1 block font-bold">{project?.title ?? "Ohne Projekt"}</span>
+            <span className="mt-1 block font-bold">
+              {project?.title ?? t("task.noProject")}
+            </span>
           </button>
         </div>
-        <label className="mt-5 flex items-center gap-3 rounded-[6px] border border-[var(--line)] bg-white/45 p-4 text-[14px] font-bold">
+        <label className="mt-5 flex items-center gap-3 rounded-[6px] border border-[var(--line)] bg-[var(--surface)] p-4 text-[14px] font-bold">
           <button
             type="button"
             onClick={onToggleDone}
             className="grid h-6 w-6 place-items-center text-[var(--red)]"
           >
-            {task.status === "done" ? <CheckSquare2 className="h-5 w-5" /> : <Square className="h-5 w-5" />}
+            {task.status === "done" ? (
+              <CheckSquare2 className="h-5 w-5" />
+            ) : (
+              <Square className="h-5 w-5" />
+            )}
           </button>
-          Erledigt
+          {t("task.done")}
         </label>
       </div>
 
@@ -1646,39 +1952,43 @@ function TaskDetailScreen({
         value={tab}
         onChange={(value) => onTabChange(value as TaskDetailTab)}
         tabs={["details", "raw", "ai"]}
-        labels={{ details: "Details", raw: "Rohnotiz", ai: "KI" }}
+        labels={{
+          details: t("task.tab.details"),
+          raw: t("task.tab.raw"),
+          ai: t("task.tab.ai"),
+        }}
       />
 
       <div className="space-y-5 px-6 md:px-8 lg:px-10">
         {tab === "details" ? (
-        <section>
-          <h2 className="text-[12px] font-bold uppercase tracking-[0.04em] text-[var(--muted)]">
-            Beschreibung
-          </h2>
-          <p className="mt-2 text-[14px] leading-7 text-[var(--ink-soft)]">
-            {task.description || "Keine Beschreibung hinterlegt."}
-          </p>
-        </section>
+          <section>
+            <h2 className="text-[12px] font-bold uppercase tracking-[0.04em] text-[var(--muted)]">
+              {t("task.descriptionHeading")}
+            </h2>
+            <p className="mt-2 text-[14px] leading-7 text-[var(--ink-soft)]">
+              {task.description || t("task.noDescription")}
+            </p>
+          </section>
         ) : null}
         {tab === "raw" ? (
-        <section>
-          <h2 className="text-[12px] font-bold uppercase tracking-[0.04em] text-[var(--muted)]">
-            Ursprüngliche Rohnotiz
-          </h2>
-          <p className="mt-2 rounded-[6px] bg-white/45 p-4 text-[13px] leading-6 text-[var(--muted)]">
-            {rawNote?.content ?? "Diese Aufgabe wurde manuell erstellt."}
-          </p>
-        </section>
+          <section>
+            <h2 className="text-[12px] font-bold uppercase tracking-[0.04em] text-[var(--muted)]">
+              {t("task.rawHeading")}
+            </h2>
+            <p className="mt-2 rounded-[6px] bg-[var(--surface)] p-4 text-[13px] leading-6 text-[var(--muted)]">
+              {rawNote?.content ?? t("task.manualCreated")}
+            </p>
+          </section>
         ) : null}
         {tab === "ai" ? (
-        <section>
-          <h2 className="text-[12px] font-bold uppercase tracking-[0.04em] text-[var(--muted)]">
-            KI-Zusammenfassung
-          </h2>
-          <p className="mt-2 text-[13px] leading-6 text-[var(--ink-soft)]">
-            {suggestion?.reasoning ?? "Keine KI-Zusammenfassung vorhanden."}
-          </p>
-        </section>
+          <section>
+            <h2 className="text-[12px] font-bold uppercase tracking-[0.04em] text-[var(--muted)]">
+              {t("task.aiHeading")}
+            </h2>
+            <p className="mt-2 text-[13px] leading-6 text-[var(--ink-soft)]">
+              {suggestion?.reasoning ?? t("task.noAi")}
+            </p>
+          </section>
         ) : null}
       </div>
     </div>
@@ -1689,16 +1999,26 @@ function MoreScreen({
   userName,
   userEmail,
   aiModel,
+  locale,
+  themePref,
   syncStatus,
+  t,
   onAiModelChange,
+  onLocaleChange,
+  onThemeChange,
   onDeleteAll,
   onLogout,
 }: {
   userName: string;
   userEmail: string;
   aiModel: AiModelId;
+  locale: Locale;
+  themePref: ThemePreference;
   syncStatus: SyncStatus;
+  t: Translator;
   onAiModelChange: (model: AiModelId) => void;
+  onLocaleChange: (locale: Locale) => void;
+  onThemeChange: (preference: ThemePreference) => void;
   onDeleteAll: () => void;
   onLogout: () => void;
 }) {
@@ -1706,27 +2026,30 @@ function MoreScreen({
 
   const syncLabel =
     syncStatus === "saving"
-      ? "Appwrite speichert..."
+      ? t("more.sync.saving")
       : syncStatus === "error"
-        ? "Fehler beim Speichern"
-        : "Alles gespeichert";
+        ? t("more.sync.error")
+        : t("more.sync.ok");
+
+  const selectClass =
+    "h-11 w-full rounded-[5px] border border-[var(--line)] bg-[var(--field)] px-3 text-[13px] font-bold outline-none";
+  const labelClass =
+    "mb-2 block text-[11px] font-bold uppercase tracking-[0.04em] text-[var(--muted)]";
 
   return (
     <div className="flex flex-1 flex-col px-6 pt-3 md:px-8 md:pt-8 lg:px-10">
-      <ScreenHeader title="Mehr" leftIcon={<MoreHorizontal className="h-5 w-5" />} />
+      <ScreenHeader title={t("more.title")} leftIcon={<MoreHorizontal className="h-5 w-5" />} />
       <div className="mt-8 space-y-3">
-        <InfoTile label="Produkt" value="Rote Agenda Webtool" />
-        <InfoTile label="Account" value={userName || userEmail} />
-        <InfoTile label="Speicherung" value={syncLabel} />
-        <section className="rounded-[6px] border border-[var(--line)] bg-white/45 p-4">
+        <InfoTile label={t("more.product")} value={t("more.productValue")} />
+        <InfoTile label={t("more.account")} value={userName || userEmail} />
+        <InfoTile label={t("more.storage")} value={syncLabel} />
+        <section className="rounded-[6px] border border-[var(--line)] bg-[var(--surface)] p-4">
           <label className="block">
-            <span className="mb-2 block text-[11px] font-bold uppercase tracking-[0.04em] text-[var(--muted)]">
-              KI-Modell
-            </span>
+            <span className={labelClass}>{t("more.aiModel")}</span>
             <select
               value={aiModel}
               onChange={(event) => onAiModelChange(event.target.value as AiModelId)}
-              className="h-11 w-full rounded-[5px] border border-[var(--line)] bg-white px-3 text-[13px] font-bold outline-none"
+              className={selectClass}
             >
               {AI_MODEL_OPTIONS.map((option) => (
                 <option key={option.id} value={option.id}>
@@ -1736,13 +2059,42 @@ function MoreScreen({
             </select>
           </label>
         </section>
+        <section className="grid grid-cols-2 gap-3">
+          <div className="rounded-[6px] border border-[var(--line)] bg-[var(--surface)] p-4">
+            <label className="block">
+              <span className={labelClass}>{t("more.language")}</span>
+              <select
+                value={locale}
+                onChange={(event) => onLocaleChange(event.target.value as Locale)}
+                className={selectClass}
+              >
+                <option value="de">Deutsch</option>
+                <option value="en">English</option>
+              </select>
+            </label>
+          </div>
+          <div className="rounded-[6px] border border-[var(--line)] bg-[var(--surface)] p-4">
+            <label className="block">
+              <span className={labelClass}>{t("more.theme")}</span>
+              <select
+                value={themePref}
+                onChange={(event) => onThemeChange(event.target.value as ThemePreference)}
+                className={selectClass}
+              >
+                <option value="system">{t("theme.system")}</option>
+                <option value="light">{t("theme.light")}</option>
+                <option value="dark">{t("theme.dark")}</option>
+              </select>
+            </label>
+          </div>
+        </section>
         {confirmingDelete ? (
-          <div className="rounded-[6px] border border-[var(--red)] bg-white/70 p-4">
+          <div className="rounded-[6px] border border-[var(--red)] bg-[var(--surface-strong)] p-4">
             <p className="text-[13px] font-bold text-[var(--red)]">
-              Wirklich alle Projekte, Aufgaben, Notizen und Vorschläge löschen?
+              {t("more.deleteAllTitle")}
             </p>
             <p className="mt-1 text-[12px] leading-5 text-[var(--muted)]">
-              Das kann nicht rückgängig gemacht werden. Dein Account bleibt bestehen.
+              {t("more.deleteAllText")}
             </p>
             <div className="mt-3 flex gap-2">
               <button
@@ -1753,14 +2105,14 @@ function MoreScreen({
                 }}
                 className="flex-1 rounded-[5px] bg-[var(--red)] px-3 py-3 text-[12px] font-bold text-white"
               >
-                Ja, alles löschen
+                {t("more.deleteAllYes")}
               </button>
               <button
                 type="button"
                 onClick={() => setConfirmingDelete(false)}
                 className="flex-1 rounded-[5px] border border-[var(--line-strong)] px-3 py-3 text-[12px] font-bold"
               >
-                Abbrechen
+                {t("common.cancel")}
               </button>
             </div>
           </div>
@@ -1768,21 +2120,21 @@ function MoreScreen({
           <button
             type="button"
             onClick={() => setConfirmingDelete(true)}
-            className="flex w-full items-center justify-between rounded-[6px] border border-[var(--line)] bg-white/45 p-4 text-[13px] font-bold text-[var(--red)]"
+            className="flex w-full items-center justify-between rounded-[6px] border border-[var(--line)] bg-[var(--surface)] p-4 text-[13px] font-bold text-[var(--red)]"
           >
-            Alle Daten löschen
+            {t("more.deleteAll")}
             <Trash2 className="h-4 w-4" />
           </button>
         )}
         <button
           type="button"
           onClick={onLogout}
-          className="flex w-full items-center justify-between rounded-[6px] border border-[var(--line)] bg-white/45 p-4 text-[13px] font-bold"
+          className="flex w-full items-center justify-between rounded-[6px] border border-[var(--line)] bg-[var(--surface)] p-4 text-[13px] font-bold"
         >
-          Abmelden
+          {t("more.logout")}
           <X className="h-4 w-4" />
         </button>
-        <LegalLinks className="pt-2" />
+        <LegalLinks t={t} className="pt-2" />
       </div>
     </div>
   );
@@ -1844,16 +2196,18 @@ function ScreenHeader({
 
 function TaskTabs({
   value,
+  t,
   onChange,
 }: {
   value: TaskFilter;
+  t: Translator;
   onChange: (filter: TaskFilter) => void;
 }) {
   const tabs: Array<{ value: TaskFilter; label: string }> = [
-    { value: "all", label: "Alle" },
-    { value: "today", label: "Heute" },
-    { value: "planned", label: "Geplant" },
-    { value: "later", label: "Später" },
+    { value: "all", label: t("filter.all") },
+    { value: "today", label: t("filter.today") },
+    { value: "planned", label: t("filter.planned") },
+    { value: "later", label: t("filter.later") },
   ];
 
   return (
@@ -1911,14 +2265,20 @@ function DetailTabs({
 function TaskRow({
   task,
   project,
+  locale,
+  t,
   onOpen,
   onToggle,
 }: {
   task: Task;
   project?: Project;
+  locale: Locale;
+  t: Translator;
   onOpen: () => void;
   onToggle: () => void;
 }) {
+  const overdue = task.status !== "done" && isOverdue(task.dueDate);
+
   return (
     <div className="flex min-h-[66px] items-center gap-3 py-3">
       <button
@@ -1944,19 +2304,17 @@ function TaskRow({
           {task.title}
         </p>
         <p className="mt-1 truncate text-[12px] text-[var(--muted)]">
-          {project?.title ?? "Ohne Projekt"}
+          {project?.title ?? t("task.noProject")}
         </p>
       </button>
       <span
         className={cx(
           "shrink-0 text-[12px]",
-          task.status !== "done" && isOverdue(task.dueDate)
-            ? "font-bold text-[var(--red)]"
-            : "text-[var(--ink-soft)]",
+          overdue ? "font-bold text-[var(--red)]" : "text-[var(--ink-soft)]",
         )}
       >
-        {task.status !== "done" && isOverdue(task.dueDate) ? "Überfällig · " : ""}
-        {formatDateLabel(task.dueDate)}
+        {overdue ? `${t("task.overdue")} · ` : ""}
+        {formatDateLabel(task.dueDate, locale)}
       </span>
     </div>
   );
@@ -1964,10 +2322,12 @@ function TaskRow({
 
 function TaskLine({
   task,
+  locale,
   onOpen,
   onToggle,
 }: {
   task: Task;
+  locale: Locale;
   onOpen: () => void;
   onToggle: () => void;
 }) {
@@ -1983,7 +2343,9 @@ function TaskLine({
       <button type="button" onClick={onOpen} className="min-w-0 flex-1 text-left">
         <span className="block truncate text-[14px] font-medium">{task.title}</span>
       </button>
-      <span className="text-[12px] text-[var(--ink-soft)]">{formatDateLabel(task.dueDate)}</span>
+      <span className="text-[12px] text-[var(--ink-soft)]">
+        {formatDateLabel(task.dueDate, locale)}
+      </span>
     </div>
   );
 }
@@ -1993,6 +2355,8 @@ function SuggestionCard({
   projects,
   isEditing,
   compact,
+  locale,
+  t,
   onAccept,
   onCreateTask,
   onReject,
@@ -2004,6 +2368,8 @@ function SuggestionCard({
   projects: Project[];
   isEditing: boolean;
   compact?: boolean;
+  locale: Locale;
+  t: Translator;
   onAccept: () => void;
   onCreateTask: () => void;
   onReject: () => void;
@@ -2015,8 +2381,8 @@ function SuggestionCard({
 
   if (suggestion.state !== "pending") {
     return (
-      <div className="rounded-[7px] border border-[var(--line)] bg-white/45 p-4 text-[13px] font-bold text-[var(--muted)]">
-        Vorschlag {suggestion.state === "accepted" ? "übernommen" : "ignoriert"}.
+      <div className="rounded-[7px] border border-[var(--line)] bg-[var(--surface)] p-4 text-[13px] font-bold text-[var(--muted)]">
+        {suggestion.state === "accepted" ? t("sugg.accepted") : t("sugg.rejected")}
       </div>
     );
   }
@@ -2026,6 +2392,7 @@ function SuggestionCard({
       <SuggestionEditor
         suggestion={suggestion}
         projects={projects}
+        t={t}
         onCancel={onCancelEdit}
         onSave={onUpdate}
       />
@@ -2033,11 +2400,11 @@ function SuggestionCard({
   }
 
   return (
-    <article className="rounded-[7px] border border-[var(--line)] bg-white/55 p-4 shadow-sm">
+    <article className="rounded-[7px] border border-[var(--line)] bg-[var(--surface)] p-4 shadow-sm">
       <div className="flex items-start justify-between gap-3">
         <div>
           <p className="text-[11px] font-extrabold uppercase tracking-[0.04em] text-[var(--red)]">
-            {suggestionStatus(suggestion)}
+            {t(suggestionStatusKey(suggestion))}
           </p>
           <h2 className="mt-2 font-display text-[20px] font-bold leading-7">
             {suggestion.suggestedTitle}
@@ -2049,10 +2416,13 @@ function SuggestionCard({
       </div>
 
       <dl className="mt-4 grid grid-cols-2 gap-3 text-[12px]">
-        <InfoTile label="Projekt" value={project?.title ?? suggestion.suggestedNewProjectTitle ?? "Unklar"} />
-        <InfoTile label="Deadline" value={formatDateLabel(suggestion.dueDate)} />
-        <InfoTile label="Priorität" value={priorityLabels[suggestion.priority]} />
-        <InfoTile label="Quelle" value="Rohnotiz" />
+        <InfoTile
+          label={t("sugg.project")}
+          value={project?.title ?? suggestion.suggestedNewProjectTitle ?? t("sugg.unclear")}
+        />
+        <InfoTile label={t("sugg.deadline")} value={formatDateLabel(suggestion.dueDate, locale)} />
+        <InfoTile label={t("sugg.priority")} value={t(priorityKeys[suggestion.priority])} />
+        <InfoTile label={t("sugg.source")} value={t("sugg.sourceValue")} />
       </dl>
 
       {!compact ? (
@@ -2067,28 +2437,28 @@ function SuggestionCard({
           onClick={onAccept}
           className="rounded-[5px] bg-[var(--red)] px-3 py-3 text-[12px] font-bold text-white"
         >
-          Übernehmen
+          {t("sugg.accept")}
         </button>
         <button
           type="button"
           onClick={onEdit}
           className="rounded-[5px] border border-[var(--line-strong)] px-3 py-3 text-[12px] font-bold"
         >
-          Bearbeiten
+          {t("sugg.edit")}
         </button>
         <button
           type="button"
           onClick={onEdit}
           className="rounded-[5px] border border-[var(--line-strong)] px-3 py-3 text-[12px] font-bold"
         >
-          Anderem Projekt zuordnen
+          {t("sugg.reassign")}
         </button>
         <button
           type="button"
           onClick={onCreateTask}
           className="rounded-[5px] border border-[var(--line-strong)] px-3 py-3 text-[12px] font-bold"
         >
-          Neue Aufgabe erstellen
+          {t("sugg.createTask")}
         </button>
       </div>
       <button
@@ -2096,7 +2466,7 @@ function SuggestionCard({
         onClick={onReject}
         className="mt-3 text-[12px] font-bold text-[var(--muted)] underline underline-offset-2"
       >
-        Ignorieren
+        {t("sugg.ignore")}
       </button>
     </article>
   );
@@ -2105,29 +2475,33 @@ function SuggestionCard({
 function SuggestionEditor({
   suggestion,
   projects,
+  t,
   onCancel,
   onSave,
 }: {
   suggestion: AiSuggestion;
   projects: Project[];
+  t: Translator;
   onCancel: () => void;
   onSave: (suggestion: AiSuggestion) => void;
 }) {
   const [draft, setDraft] = useState(suggestion);
+  const inputClass =
+    "h-11 w-full rounded-[5px] border border-[var(--line)] bg-[var(--field)] px-3 text-[13px] outline-none";
 
   return (
-    <article className="rounded-[7px] border border-[var(--line)] bg-white/70 p-4 shadow-sm">
+    <article className="rounded-[7px] border border-[var(--line)] bg-[var(--surface-strong)] p-4 shadow-sm">
       <div className="space-y-3">
-        <Field label="Aufgabe">
+        <Field label={t("sugg.taskLabel")}>
           <input
             value={draft.suggestedTitle}
             onChange={(event) =>
               setDraft((current) => ({ ...current, suggestedTitle: event.target.value }))
             }
-            className="h-11 w-full rounded-[5px] border border-[var(--line)] bg-white px-3 text-[13px] outline-none"
+            className={inputClass}
           />
         </Field>
-        <Field label="Projekt">
+        <Field label={t("sugg.project")}>
           <select
             value={draft.suggestedProjectId ?? "__new"}
             onChange={(event) =>
@@ -2135,21 +2509,23 @@ function SuggestionEditor({
                 ...current,
                 suggestedProjectId: event.target.value === "__new" ? null : event.target.value,
                 suggestedNewProjectTitle:
-                  event.target.value === "__new" ? current.suggestedNewProjectTitle ?? "Neues Projekt" : null,
+                  event.target.value === "__new"
+                    ? current.suggestedNewProjectTitle ?? t("sugg.newProjectLabel")
+                    : null,
               }))
             }
-            className="h-11 w-full rounded-[5px] border border-[var(--line)] bg-white px-3 text-[13px] outline-none"
+            className={inputClass}
           >
             {projects.map((project) => (
               <option key={project.id} value={project.id}>
                 {project.title}
               </option>
             ))}
-            <option value="__new">Neues Projekt vorschlagen</option>
+            <option value="__new">{t("sugg.proposeNew")}</option>
           </select>
         </Field>
         {!draft.suggestedProjectId ? (
-          <Field label="Neues Projekt">
+          <Field label={t("sugg.newProjectLabel")}>
             <input
               value={draft.suggestedNewProjectTitle ?? ""}
               onChange={(event) =>
@@ -2158,12 +2534,12 @@ function SuggestionEditor({
                   suggestedNewProjectTitle: event.target.value,
                 }))
               }
-              className="h-11 w-full rounded-[5px] border border-[var(--line)] bg-white px-3 text-[13px] outline-none"
+              className={inputClass}
             />
           </Field>
         ) : null}
         <div className="grid grid-cols-2 gap-3">
-          <Field label="Deadline">
+          <Field label={t("sugg.deadline")}>
             <input
               type="date"
               value={draft.dueDate ?? ""}
@@ -2173,10 +2549,10 @@ function SuggestionEditor({
                   dueDate: event.target.value || null,
                 }))
               }
-              className="h-11 w-full rounded-[5px] border border-[var(--line)] bg-white px-3 text-[13px] outline-none"
+              className={inputClass}
             />
           </Field>
-          <Field label="Priorität">
+          <Field label={t("sugg.priority")}>
             <select
               value={draft.priority}
               onChange={(event) =>
@@ -2185,11 +2561,11 @@ function SuggestionEditor({
                   priority: event.target.value as TaskPriority,
                 }))
               }
-              className="h-11 w-full rounded-[5px] border border-[var(--line)] bg-white px-3 text-[13px] outline-none"
+              className={inputClass}
             >
-              <option value="low">Niedrig</option>
-              <option value="medium">Mittel</option>
-              <option value="high">Hoch</option>
+              <option value="low">{t("priority.low")}</option>
+              <option value="medium">{t("priority.medium")}</option>
+              <option value="high">{t("priority.high")}</option>
             </select>
           </Field>
         </div>
@@ -2200,14 +2576,14 @@ function SuggestionEditor({
           onClick={() => onSave(draft)}
           className="flex-1 rounded-[5px] bg-[var(--red)] px-3 py-3 text-[12px] font-bold text-white"
         >
-          Speichern
+          {t("common.save")}
         </button>
         <button
           type="button"
           onClick={onCancel}
           className="flex-1 rounded-[5px] border border-[var(--line-strong)] px-3 py-3 text-[12px] font-bold"
         >
-          Abbrechen
+          {t("common.cancel")}
         </button>
       </div>
     </article>
@@ -2217,56 +2593,62 @@ function SuggestionEditor({
 function TaskEditor({
   task,
   projects,
+  t,
   onClose,
   onDelete,
   onSave,
 }: {
   task: Task;
   projects: Project[];
+  t: Translator;
   onClose: () => void;
   onDelete: (taskId: string) => void;
   onSave: (task: Task) => void;
 }) {
   const [draft, setDraft] = useState(task);
+  const inputClass =
+    "h-11 w-full rounded-[5px] border border-[var(--line)] bg-[var(--field)] px-3 text-[13px] outline-none";
+  const smallInputClass =
+    "h-11 w-full rounded-[5px] border border-[var(--line)] bg-[var(--field)] px-2 text-[12px] outline-none";
 
   return (
     <div className="fixed inset-0 z-50 grid place-items-end bg-black/35 p-0 md:place-items-center md:p-6">
       <div className="w-full max-w-[430px] rounded-t-[18px] bg-[var(--paper-soft)] p-6 shadow-2xl md:rounded-[18px]">
         <div className="flex items-center justify-between">
-          <h2 className="font-display text-[22px] font-bold">Aufgabe bearbeiten</h2>
+          <h2 className="font-display text-[22px] font-bold">{t("taskEditor.title")}</h2>
           <button
             type="button"
             onClick={onClose}
-            aria-label="Schließen"
+            aria-label={t("common.close")}
             className="grid h-9 w-9 place-items-center"
           >
             <X className="h-5 w-5" />
           </button>
         </div>
         <div className="mt-5 space-y-3">
-          <Field label="Titel">
+          <Field label={t("editor.titleLabel")}>
             <input
               value={draft.title}
               onChange={(event) => setDraft((current) => ({ ...current, title: event.target.value }))}
-              className="h-11 w-full rounded-[5px] border border-[var(--line)] bg-white px-3 text-[13px] outline-none"
+              className={inputClass}
             />
           </Field>
-          <Field label="Beschreibung">
+          <Field label={t("editor.description")}>
             <textarea
               value={draft.description}
               onChange={(event) =>
                 setDraft((current) => ({ ...current, description: event.target.value }))
               }
-              className="min-h-24 w-full resize-none rounded-[5px] border border-[var(--line)] bg-white px-3 py-3 text-[13px] outline-none"
+              className="min-h-24 w-full resize-none rounded-[5px] border border-[var(--line)] bg-[var(--field)] px-3 py-3 text-[13px] outline-none"
             />
           </Field>
-          <Field label="Projekt">
+          <Field label={t("editor.project")}>
             <select
               value={draft.projectId}
               onChange={(event) =>
                 setDraft((current) => ({ ...current, projectId: event.target.value }))
               }
-              className="h-11 w-full rounded-[5px] border border-[var(--line)] bg-white px-3 text-[13px] outline-none"
+              className={inputClass}
             >
               {projects.map((project) => (
                 <option key={project.id} value={project.id}>
@@ -2276,7 +2658,7 @@ function TaskEditor({
             </select>
           </Field>
           <div className="grid grid-cols-3 gap-3">
-            <Field label="Status">
+            <Field label={t("editor.status")}>
               <select
                 value={draft.status}
                 onChange={(event) =>
@@ -2285,14 +2667,14 @@ function TaskEditor({
                     status: event.target.value as TaskStatus,
                   }))
                 }
-                className="h-11 w-full rounded-[5px] border border-[var(--line)] bg-white px-2 text-[12px] outline-none"
+                className={smallInputClass}
               >
-                <option value="open">Offen</option>
-                <option value="in_progress">In Arbeit</option>
-                <option value="done">Erledigt</option>
+                <option value="open">{t("status.open")}</option>
+                <option value="in_progress">{t("status.in_progress")}</option>
+                <option value="done">{t("status.done")}</option>
               </select>
             </Field>
-            <Field label="Priorität">
+            <Field label={t("editor.priority")}>
               <select
                 value={draft.priority}
                 onChange={(event) =>
@@ -2301,21 +2683,21 @@ function TaskEditor({
                     priority: event.target.value as TaskPriority,
                   }))
                 }
-                className="h-11 w-full rounded-[5px] border border-[var(--line)] bg-white px-2 text-[12px] outline-none"
+                className={smallInputClass}
               >
-                <option value="low">Niedrig</option>
-                <option value="medium">Mittel</option>
-                <option value="high">Hoch</option>
+                <option value="low">{t("priority.low")}</option>
+                <option value="medium">{t("priority.medium")}</option>
+                <option value="high">{t("priority.high")}</option>
               </select>
             </Field>
-            <Field label="Deadline">
+            <Field label={t("editor.deadline")}>
               <input
                 type="date"
                 value={draft.dueDate ?? ""}
                 onChange={(event) =>
                   setDraft((current) => ({ ...current, dueDate: event.target.value || null }))
                 }
-                className="h-11 w-full rounded-[5px] border border-[var(--line)] bg-white px-2 text-[12px] outline-none"
+                className={smallInputClass}
               />
             </Field>
           </div>
@@ -2327,14 +2709,14 @@ function TaskEditor({
             disabled={!draft.title.trim()}
             className="flex-1 rounded-[5px] bg-[var(--red)] px-3 py-3 text-[13px] font-bold text-white disabled:opacity-50"
           >
-            Speichern
+            {t("common.save")}
           </button>
           <button
             type="button"
             onClick={() => onDelete(draft.id)}
             className="rounded-[5px] border border-[var(--line-strong)] px-3 py-3 text-[13px] font-bold text-[var(--red)]"
           >
-            Löschen
+            {t("common.delete")}
           </button>
         </div>
       </div>
@@ -2346,6 +2728,7 @@ function ProjectEditor({
   project,
   isNew,
   taskCount,
+  t,
   onClose,
   onDelete,
   onSave,
@@ -2353,6 +2736,7 @@ function ProjectEditor({
   project: Project;
   isNew: boolean;
   taskCount: number;
+  t: Translator;
   onClose: () => void;
   onDelete: (projectId: string) => void;
   onSave: (project: Project) => void;
@@ -2360,6 +2744,8 @@ function ProjectEditor({
   const [draft, setDraft] = useState(project);
   const [keywordsText, setKeywordsText] = useState(project.keywords.join(", "));
   const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const inputClass =
+    "h-11 w-full rounded-[5px] border border-[var(--line)] bg-[var(--field)] px-3 text-[13px] outline-none";
 
   function parseKeywords(value: string) {
     return Array.from(
@@ -2372,49 +2758,56 @@ function ProjectEditor({
     ).slice(0, 12);
   }
 
+  const deleteConfirmKey: MessageKey =
+    taskCount === 0
+      ? "projectEditor.deleteConfirm.none"
+      : taskCount === 1
+        ? "projectEditor.deleteConfirm.one"
+        : "projectEditor.deleteConfirm.many";
+
   return (
     <div className="fixed inset-0 z-50 grid place-items-end bg-black/35 p-0 md:place-items-center md:p-6">
       <div className="w-full max-w-[430px] rounded-t-[18px] bg-[var(--paper-soft)] p-6 shadow-2xl md:rounded-[18px]">
         <div className="flex items-center justify-between">
           <h2 className="font-display text-[22px] font-bold">
-            {isNew ? "Projekt anlegen" : "Projekt bearbeiten"}
+            {isNew ? t("projectEditor.createTitle") : t("projectEditor.editTitle")}
           </h2>
           <button
             type="button"
             onClick={onClose}
-            aria-label="Schließen"
+            aria-label={t("common.close")}
             className="grid h-9 w-9 place-items-center"
           >
             <X className="h-5 w-5" />
           </button>
         </div>
         <div className="mt-5 space-y-3">
-          <Field label="Titel">
+          <Field label={t("editor.titleLabel")}>
             <input
               value={draft.title}
               onChange={(event) => setDraft((current) => ({ ...current, title: event.target.value }))}
-              className="h-11 w-full rounded-[5px] border border-[var(--line)] bg-white px-3 text-[13px] outline-none"
+              className={inputClass}
             />
           </Field>
-          <Field label="Beschreibung">
+          <Field label={t("editor.description")}>
             <textarea
               value={draft.description}
               onChange={(event) =>
                 setDraft((current) => ({ ...current, description: event.target.value }))
               }
-              className="min-h-20 w-full resize-none rounded-[5px] border border-[var(--line)] bg-white px-3 py-3 text-[13px] outline-none"
+              className="min-h-20 w-full resize-none rounded-[5px] border border-[var(--line)] bg-[var(--field)] px-3 py-3 text-[13px] outline-none"
             />
           </Field>
-          <Field label="Keywords (durch Komma getrennt)">
+          <Field label={t("projectEditor.keywords")}>
             <input
               value={keywordsText}
               onChange={(event) => setKeywordsText(event.target.value)}
-              placeholder="z. B. kunde, angebot, newsletter"
-              className="h-11 w-full rounded-[5px] border border-[var(--line)] bg-white px-3 text-[13px] outline-none"
+              placeholder={t("projectEditor.keywordsPlaceholder")}
+              className={inputClass}
             />
           </Field>
-          <label className="flex items-center justify-between rounded-[5px] border border-[var(--line)] bg-white px-3 py-3 text-[13px] font-bold">
-            KI darf Notizen diesem Projekt zuordnen
+          <label className="flex items-center justify-between rounded-[5px] border border-[var(--line)] bg-[var(--field)] px-3 py-3 text-[13px] font-bold">
+            {t("projectEditor.aiLabel")}
             <input
               type="checkbox"
               checked={draft.aiEnabled}
@@ -2426,9 +2819,9 @@ function ProjectEditor({
           </label>
         </div>
         {confirmingDelete ? (
-          <div className="mt-5 rounded-[6px] border border-[var(--red)] bg-white/70 p-4">
+          <div className="mt-5 rounded-[6px] border border-[var(--red)] bg-[var(--surface-strong)] p-4">
             <p className="text-[13px] font-bold text-[var(--red)]">
-              Projekt löschen{taskCount ? ` – inklusive ${taskCount} ${taskCount === 1 ? "Aufgabe" : "Aufgaben"}` : ""}?
+              {t(deleteConfirmKey, { count: taskCount })}
             </p>
             <div className="mt-3 flex gap-2">
               <button
@@ -2436,14 +2829,14 @@ function ProjectEditor({
                 onClick={() => onDelete(draft.id)}
                 className="flex-1 rounded-[5px] bg-[var(--red)] px-3 py-3 text-[12px] font-bold text-white"
               >
-                Ja, löschen
+                {t("projectEditor.confirmYes")}
               </button>
               <button
                 type="button"
                 onClick={() => setConfirmingDelete(false)}
                 className="flex-1 rounded-[5px] border border-[var(--line-strong)] px-3 py-3 text-[12px] font-bold"
               >
-                Abbrechen
+                {t("common.cancel")}
               </button>
             </div>
           </div>
@@ -2462,7 +2855,7 @@ function ProjectEditor({
               disabled={!draft.title.trim()}
               className="flex-1 rounded-[5px] bg-[var(--red)] px-3 py-3 text-[13px] font-bold text-white disabled:opacity-50"
             >
-              Speichern
+              {t("common.save")}
             </button>
             {!isNew ? (
               <button
@@ -2470,7 +2863,7 @@ function ProjectEditor({
                 onClick={() => setConfirmingDelete(true)}
                 className="rounded-[5px] border border-[var(--line-strong)] px-3 py-3 text-[13px] font-bold text-[var(--red)]"
               >
-                Löschen
+                {t("common.delete")}
               </button>
             ) : null}
           </div>
@@ -2483,17 +2876,19 @@ function ProjectEditor({
 function BottomNav({
   screen,
   pendingCount,
+  t,
   onNavigate,
 }: {
   screen: Screen;
   pendingCount: number;
+  t: Translator;
   onNavigate: (screen: Screen) => void;
 }) {
   const items = [
-    { screen: "today" as Screen, label: "Heute", icon: Home },
-    { screen: "projects" as Screen, label: "Projekte", icon: ClipboardList },
-    { screen: "inbox" as Screen, label: "Inbox", icon: Inbox, count: pendingCount },
-    { screen: "more" as Screen, label: "Mehr", icon: MoreHorizontal },
+    { screen: "today" as Screen, label: t("nav.today"), icon: Home },
+    { screen: "projects" as Screen, label: t("nav.projects"), icon: ClipboardList },
+    { screen: "inbox" as Screen, label: t("nav.inbox"), icon: Inbox, count: pendingCount },
+    { screen: "more" as Screen, label: t("nav.more"), icon: MoreHorizontal },
   ];
 
   return (
@@ -2506,7 +2901,7 @@ function BottomNav({
           type="button"
           onClick={() => onNavigate("capture")}
           className="mx-auto -mt-3 grid h-[62px] w-[62px] place-items-center rounded-full bg-[var(--red)] text-white shadow-lg shadow-black/25"
-          aria-label="Schnellnotiz erfassen"
+          aria-label={t("nav.capture")}
         >
           <Plus className="h-9 w-9" />
         </button>
@@ -2549,25 +2944,31 @@ function NavButton({
 function DesktopSidebar({
   screen,
   pendingCount,
+  t,
   onNavigate,
 }: {
   screen: Screen;
   pendingCount: number;
+  t: Translator;
   onNavigate: (screen: Screen) => void;
 }) {
   const items = [
-    { screen: "today" as Screen, label: "Heute", icon: Home },
-    { screen: "projects" as Screen, label: "Projekte", icon: ClipboardList },
-    { screen: "inbox" as Screen, label: `Inbox${pendingCount ? ` (${pendingCount})` : ""}`, icon: Inbox },
-    { screen: "more" as Screen, label: "Mehr", icon: MoreHorizontal },
+    { screen: "today" as Screen, label: t("nav.today"), icon: Home },
+    { screen: "projects" as Screen, label: t("nav.projects"), icon: ClipboardList },
+    {
+      screen: "inbox" as Screen,
+      label: `${t("nav.inbox")}${pendingCount ? ` (${pendingCount})` : ""}`,
+      icon: Inbox,
+    },
+    { screen: "more" as Screen, label: t("nav.more"), icon: MoreHorizontal },
   ];
 
   return (
-    <aside className="sticky top-6 hidden rounded-[12px] border border-[var(--line)] bg-white/35 p-4 md:block">
+    <aside className="sticky top-6 hidden rounded-[12px] border border-[var(--line)] bg-[var(--surface)] p-4 md:block">
       <div className="px-2">
         <p className="font-display text-[24px] font-bold">Rote Agenda</p>
         <p className="mt-2 text-[12px] leading-5 text-[var(--muted)]">
-          Der rote Faden für deine Projekte.
+          {t("welcome.tagline")}
         </p>
       </div>
       <div className="mt-6 space-y-1">
@@ -2584,7 +2985,7 @@ function DesktopSidebar({
               onClick={() => onNavigate(item.screen)}
               className={cx(
                 "flex w-full items-center gap-3 rounded-[6px] px-3 py-3 text-left text-[13px] font-bold",
-                active ? "bg-[var(--green)] text-white" : "hover:bg-white/55",
+                active ? "bg-[var(--green)] text-white" : "hover:bg-[var(--surface-strong)]",
               )}
             >
               <Icon className="h-4 w-4" />
@@ -2599,7 +3000,7 @@ function DesktopSidebar({
         className="mt-6 flex w-full items-center justify-center gap-2 rounded-[6px] bg-[var(--red)] px-4 py-3 text-[13px] font-bold text-white"
       >
         <Plus className="h-4 w-4" />
-        Schnell erfassen
+        {t("nav.captureButton")}
       </button>
     </aside>
   );
@@ -2608,11 +3009,13 @@ function DesktopSidebar({
 function DesktopInsightPanel({
   data,
   selectedProject,
+  t,
   onCapture,
   onOpenInbox,
 }: {
   data: AppData;
   selectedProject?: Project;
+  t: Translator;
   onCapture: () => void;
   onOpenInbox: () => void;
 }) {
@@ -2624,15 +3027,17 @@ function DesktopInsightPanel({
 
   return (
     <aside className="sticky top-6 hidden space-y-4 md:block">
-      <section className="rounded-[12px] border border-[var(--line)] bg-white/35 p-5">
+      <section className="rounded-[12px] border border-[var(--line)] bg-[var(--surface)] p-5">
         <p className="text-[11px] font-extrabold uppercase tracking-[0.05em] text-[var(--red)]">
-          Fokus
+          {t("insight.focus")}
         </p>
         <h2 className="mt-3 font-display text-[26px] font-bold">
-          {openTasks.length} offene Aufgaben
+          {t(openTasks.length === 1 ? "insight.openTasks.one" : "insight.openTasks.many", {
+            count: openTasks.length,
+          })}
         </h2>
         <p className="mt-2 text-[13px] leading-6 text-[var(--muted)]">
-          Capture bleibt schnell, die Ordnung passiert danach in Vorschlägen und Projekten.
+          {t("insight.philosophy")}
         </p>
         <button
           type="button"
@@ -2640,16 +3045,16 @@ function DesktopInsightPanel({
           className="mt-5 flex w-full items-center justify-center gap-2 rounded-[6px] bg-[var(--green)] px-4 py-3 text-[13px] font-bold text-white"
         >
           <Plus className="h-4 w-4" />
-          Neue Rohnotiz
+          {t("insight.newNote")}
         </button>
       </section>
 
       {selectedProject ? (
-        <section className="rounded-[12px] border border-[var(--line)] bg-white/35 p-5">
+        <section className="rounded-[12px] border border-[var(--line)] bg-[var(--surface)] p-5">
           <div className="flex items-start justify-between gap-4">
             <div>
               <p className="text-[11px] font-extrabold uppercase tracking-[0.05em] text-[var(--red)]">
-                Aktives Projekt
+                {t("insight.activeProject")}
               </p>
               <h2 className="mt-3 font-display text-[23px] font-bold">
                 {selectedProject.title}
@@ -2659,7 +3064,12 @@ function DesktopInsightPanel({
           </div>
           <ProgressBar value={projectProgress(selectedProject, projectTasks)} className="mt-5" />
           <p className="mt-3 text-[12px] text-[var(--muted)]">
-            {projectTasks.filter((task) => task.status !== "done").length} offene Aufgaben
+            {t(
+              projectTasks.filter((task) => task.status !== "done").length === 1
+                ? "insight.openTasks.one"
+                : "insight.openTasks.many",
+              { count: projectTasks.filter((task) => task.status !== "done").length },
+            )}
           </p>
         </section>
       ) : null}
@@ -2667,14 +3077,16 @@ function DesktopInsightPanel({
       <button
         type="button"
         onClick={onOpenInbox}
-        className="flex w-full items-center justify-between rounded-[12px] border border-[var(--line)] bg-white/35 p-5 text-left"
+        className="flex w-full items-center justify-between rounded-[12px] border border-[var(--line)] bg-[var(--surface)] p-5 text-left"
       >
         <span>
           <span className="block text-[11px] font-extrabold uppercase tracking-[0.05em] text-[var(--red)]">
-            KI-Prüfung
+            {t("insight.aiReview")}
           </span>
           <span className="mt-2 block font-display text-[22px] font-bold">
-            {pending.length} Vorschläge offen
+            {t(pending.length === 1 ? "insight.pending.one" : "insight.pending.many", {
+              count: pending.length,
+            })}
           </span>
         </span>
         <ChevronRight className="h-5 w-5" />
@@ -2685,7 +3097,7 @@ function DesktopInsightPanel({
 
 function ProgressBar({ value, className }: { value: number; className?: string }) {
   return (
-    <div className={cx("h-1.5 overflow-hidden rounded-full bg-black/12", className)}>
+    <div className={cx("h-1.5 overflow-hidden rounded-full bg-[var(--track)]", className)}>
       <div
         className="h-full rounded-full bg-[var(--red)] transition-all"
         style={{ width: `${Math.max(0, Math.min(100, value))}%` }}
@@ -2696,7 +3108,7 @@ function ProgressBar({ value, className }: { value: number; className?: string }
 
 function InfoTile({ label, value }: { label: string; value: string | number }) {
   return (
-    <div className="rounded-[6px] border border-[var(--line)] bg-white/45 p-3">
+    <div className="rounded-[6px] border border-[var(--line)] bg-[var(--surface)] p-3">
       <dt className="text-[10px] font-bold uppercase tracking-[0.05em] text-[var(--muted)]">
         {label}
       </dt>
@@ -2725,11 +3137,11 @@ function EmptyState({ title, text }: { title: string; text: string }) {
   );
 }
 
-function suggestionStatus(suggestion: AiSuggestion) {
-  if (suggestion.suggestedNewProjectTitle) return "Neues Projekt vorgeschlagen";
-  if (suggestion.needsReview) return "Rückfrage nötig";
-  if (suggestion.confidence < 0.75) return "Unsicher";
-  return "Sicher zugeordnet";
+function suggestionStatusKey(suggestion: AiSuggestion): MessageKey {
+  if (suggestion.suggestedNewProjectTitle) return "sugg.status.newProject";
+  if (suggestion.needsReview) return "sugg.status.review";
+  if (suggestion.confidence < 0.75) return "sugg.status.unsure";
+  return "sugg.status.confident";
 }
 
 function projectProgress(project: Project, tasks: Task[]) {
@@ -2738,9 +3150,9 @@ function projectProgress(project: Project, tasks: Task[]) {
   return Math.round((done / tasks.length) * 100);
 }
 
-function readErrorMessage(error: unknown) {
+function readErrorMessage(error: unknown, t: Translator) {
   if (error instanceof Error && error.message) return error.message;
-  return "Unerwarteter Fehler. Bitte versuche es erneut.";
+  return t("error.unexpected");
 }
 
 function aiModelLabel(model: AiModelId) {

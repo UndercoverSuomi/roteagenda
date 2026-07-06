@@ -1,4 +1,24 @@
-const WEEKDAYS = ["So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"];
+import { translate, type Locale } from "@/lib/i18n";
+
+const WEEKDAYS: Record<Locale, string[]> = {
+  de: ["So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"],
+  en: ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"],
+};
+
+const EN_MONTHS = [
+  "Jan",
+  "Feb",
+  "Mar",
+  "Apr",
+  "May",
+  "Jun",
+  "Jul",
+  "Aug",
+  "Sep",
+  "Oct",
+  "Nov",
+  "Dec",
+];
 
 export function toIsoDate(date: Date) {
   const year = date.getFullYear();
@@ -20,18 +40,23 @@ export function nextWeekday(from: Date, targetDay: number) {
   return copy;
 }
 
-export function formatDateLabel(isoDate: string | null) {
-  if (!isoDate) return "Ohne Termin";
+export function formatDateLabel(isoDate: string | null, locale: Locale = "de") {
+  if (!isoDate) return translate(locale, "date.none");
 
   const today = startOfDay(new Date());
   const date = startOfDay(new Date(`${isoDate}T00:00:00`));
   const diff = Math.round((date.getTime() - today.getTime()) / 86_400_000);
 
-  if (diff === -1) return "Gestern";
-  if (diff === 0) return "Heute";
-  if (diff === 1) return "Morgen";
+  if (diff === -1) return translate(locale, "date.yesterday");
+  if (diff === 0) return translate(locale, "date.today");
+  if (diff === 1) return translate(locale, "date.tomorrow");
 
-  const day = WEEKDAYS[date.getDay()];
+  const day = WEEKDAYS[locale][date.getDay()];
+
+  if (locale === "en") {
+    return `${day}, ${EN_MONTHS[date.getMonth()]} ${date.getDate()}`;
+  }
+
   return `${day}, ${String(date.getDate()).padStart(2, "0")}.${String(
     date.getMonth() + 1,
   ).padStart(2, "0")}.`;

@@ -7,11 +7,17 @@ Die Oberflaeche ist zuerst als responsives Webtool gedacht: schnell am Handy erf
 ## Kernflow
 
 - Registrieren oder anmelden (inkl. Passwort-zuruecksetzen per E-Mail)
-- Notiz schnell erfassen
-- KI verarbeitet und klassifiziert die Rohnotiz (mit aktuellem Datum als Referenz)
+- Notiz schnell erfassen — getippt oder per Mikrofon eingesprochen (Web Speech API)
+- KI verarbeitet und klassifiziert die Rohnotiz (mit aktuellem Datum als Referenz, auf Deutsch oder Englisch)
 - Vorschlag pruefen, bearbeiten, uebernehmen oder ignorieren
 - Aufgabe erscheint im passenden Projekt und auf dem Heute-Dashboard
 - Aufgaben abhaken, bearbeiten, Projekte anlegen und verwalten
+
+## Einstellungen
+
+- Sprache: Deutsch/Englisch (folgt initial der Browsersprache, umstellbar unter "Mehr")
+- Design: System/Hell/Dunkel
+- KI-Modell pro Account waehlbar
 
 ## Tech Stack
 

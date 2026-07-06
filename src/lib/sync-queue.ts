@@ -1,5 +1,7 @@
 export type SyncStatus = "idle" | "saving" | "error";
 
+export type SyncFailure = { label: string; detail: string };
+
 export type SyncQueue = {
   push: (label: string, job: () => Promise<void>) => void;
   retry: () => void;
@@ -9,7 +11,7 @@ export type SyncQueue = {
 // Serialisiert alle Schreibzugriffe in Reihenfolge. Schlägt ein Job fehl,
 // bleibt er samt Nachfolgern in der Queue und kann per retry() erneut laufen.
 export function createSyncQueue(
-  onChange: (status: SyncStatus, error: string | null) => void,
+  onChange: (status: SyncStatus, failure: SyncFailure | null) => void,
 ): SyncQueue {
   type QueuedJob = { label: string; job: () => Promise<void> };
 
@@ -32,7 +34,7 @@ export function createSyncQueue(
           error instanceof Error && error.message
             ? error.message
             : "Unbekannter Fehler.";
-        onChange("error", `„${next.label}“ konnte nicht gespeichert werden: ${detail}`);
+        onChange("error", { label: next.label, detail });
         return;
       }
     }

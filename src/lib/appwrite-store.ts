@@ -5,6 +5,7 @@ import {
   APPWRITE_DATABASE_ID,
 } from "@/lib/appwrite-config";
 import { DEFAULT_AI_MODEL_ID, isAiModelId } from "@/lib/ai-models";
+import { isLocale, type Locale } from "@/lib/i18n";
 import type {
   AiSuggestion,
   AppData,
@@ -25,10 +26,13 @@ const PAGE_SIZE = 100;
 // Sicherheitsgrenze gegen Endlosschleifen; weit über realistischen Datenmengen.
 const MAX_DOCUMENTS = 5000;
 
-export async function loadAppDataForUser(user: AppwriteUser): Promise<AppData> {
+export async function loadAppDataForUser(
+  user: AppwriteUser,
+  fallbackLocale: Locale = "de",
+): Promise<AppData> {
   try {
     const [settings, projects, tasks, rawNotes, suggestions] = await Promise.all([
-      readSettings(),
+      readSettings(fallbackLocale),
       listAllDocuments<Project>("projects"),
       listAllDocuments<Task>("tasks"),
       listAllDocuments<RawNote>("rawNotes"),
@@ -90,17 +94,21 @@ export async function deleteAllUserData() {
   }
 }
 
-async function readSettings(): Promise<UserSettings> {
+async function readSettings(fallbackLocale: Locale): Promise<UserSettings> {
   try {
     const prefs = await account.getPrefs<AppwritePrefs>();
     const aiModel =
       typeof prefs.aiModel === "string" && isAiModelId(prefs.aiModel)
         ? prefs.aiModel
         : DEFAULT_AI_MODEL_ID;
+    const locale =
+      typeof prefs.locale === "string" && isLocale(prefs.locale)
+        ? prefs.locale
+        : fallbackLocale;
 
-    return { aiModel };
+    return { aiModel, locale };
   } catch {
-    return { aiModel: DEFAULT_AI_MODEL_ID };
+    return { aiModel: DEFAULT_AI_MODEL_ID, locale: fallbackLocale };
   }
 }
 

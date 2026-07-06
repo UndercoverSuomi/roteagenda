@@ -1,0 +1,409 @@
+export type Locale = "de" | "en";
+
+export function isLocale(value: string): value is Locale {
+  return value === "de" || value === "en";
+}
+
+const messages = {
+  // Boot & Shell
+  "boot.checkingSession": {
+    de: "Appwrite-Sitzung wird geprüft.",
+    en: "Checking your Appwrite session.",
+  },
+  "boot.loadingData": {
+    de: "Daten werden aus Appwrite geladen.",
+    en: "Loading your data from Appwrite.",
+  },
+  "boot.setupTitle": { de: "Appwrite Setup", en: "Appwrite setup" },
+  "boot.loadErrorFallback": {
+    de: "Die Appwrite-Daten konnten nicht geladen werden.",
+    en: "Your Appwrite data could not be loaded.",
+  },
+  "sync.failed": {
+    de: "„{label}“ konnte nicht gespeichert werden: {detail}",
+    en: "“{label}” could not be saved: {detail}",
+  },
+  "common.retry": { de: "Erneut versuchen", en: "Try again" },
+  "common.save": { de: "Speichern", en: "Save" },
+  "common.cancel": { de: "Abbrechen", en: "Cancel" },
+  "common.delete": { de: "Löschen", en: "Delete" },
+  "common.close": { de: "Schließen", en: "Close" },
+  "common.back": { de: "Zurück", en: "Back" },
+  "common.pleaseWait": { de: "Bitte warten...", en: "Please wait..." },
+  "error.unexpected": {
+    de: "Unerwarteter Fehler. Bitte versuche es erneut.",
+    en: "Unexpected error. Please try again.",
+  },
+
+  // Auth
+  "auth.title.login": { de: "Anmelden", en: "Sign in" },
+  "auth.title.register": { de: "Account erstellen", en: "Create account" },
+  "auth.title.recover": { de: "Passwort zurücksetzen", en: "Reset password" },
+  "auth.recoverHint": {
+    de: "Wir schicken dir einen Link, mit dem du ein neues Passwort setzen kannst.",
+    en: "We will send you a link to set a new password.",
+  },
+  "auth.name": { de: "Name", en: "Name" },
+  "auth.email": { de: "E-Mail", en: "Email" },
+  "auth.password": { de: "Passwort", en: "Password" },
+  "auth.submit.login": { de: "Anmelden", en: "Sign in" },
+  "auth.submit.register": { de: "Registrieren", en: "Register" },
+  "auth.submit.recover": { de: "Link anfordern", en: "Request link" },
+  "auth.toRegister": {
+    de: "Noch kein Account? Registrieren",
+    en: "No account yet? Register",
+  },
+  "auth.toRecover": { de: "Passwort vergessen?", en: "Forgot your password?" },
+  "auth.backToLogin.register": {
+    de: "Schon registriert? Anmelden",
+    en: "Already registered? Sign in",
+  },
+  "auth.backToLogin.recover": {
+    de: "Zurück zur Anmeldung",
+    en: "Back to sign-in",
+  },
+  "auth.recoverySent": {
+    de: "E-Mail verschickt. Öffne den Link aus der Nachricht, um ein neues Passwort zu setzen.",
+    en: "Email sent. Open the link in the message to set a new password.",
+  },
+
+  // Welcome
+  "welcome.kicker": { de: "Webbasiertes Capture-Tool", en: "Web-based capture tool" },
+  "welcome.tagline": {
+    de: "Der rote Faden für deine Projekte.",
+    en: "The red thread through your projects.",
+  },
+  "welcome.motto": {
+    de: "Organisiere Gedanken. Strukturiere Projekte. Verändere die Welt.",
+    en: "Organize thoughts. Structure projects. Change the world.",
+  },
+  "welcome.desc": {
+    de: "Zuerst als schnelles Webtool gedacht: am Handy sofort erfassen, am Desktop Aufgaben, Projekte und KI-Vorschläge bequem prüfen. Die Oberfläche bleibt später gut als Android-App adaptierbar.",
+    en: "Built web-first: capture instantly on your phone, then review tasks, projects and AI suggestions comfortably on desktop. The interface stays ready for a later Android app.",
+  },
+  "welcome.start": { de: "Los geht's", en: "Let's go" },
+  "welcome.imageAlt": {
+    de: "Bewegungssilhouette mit roter Flagge",
+    en: "Movement silhouette with a red flag",
+  },
+
+  // Today
+  "today.title": { de: "Heute", en: "Today" },
+  "today.openMore": { de: "Mehr öffnen", en: "Open more" },
+  "today.openInbox": { de: "Inbox öffnen", en: "Open inbox" },
+  "today.capturePrompt": { de: "Was beschäftigt dich?", en: "What's on your mind?" },
+  "today.aiUpdate": { de: "KI-Update", en: "AI update" },
+  "today.notesProcessed.one": { de: "{count} Notiz verarbeitet", en: "{count} note processed" },
+  "today.notesProcessed.many": { de: "{count} Notizen verarbeitet", en: "{count} notes processed" },
+  "today.accepted": { de: "{count} übernommen", en: "{count} accepted" },
+  "today.toReview": { de: "{count} zu prüfen", en: "{count} to review" },
+  "today.myTasks": { de: "Meine Aufgaben", en: "My tasks" },
+  "today.showAll": { de: "Alle anzeigen", en: "Show all" },
+  "today.welcomeTitle": { de: "Willkommen bei Rote Agenda", en: "Welcome to Rote Agenda" },
+  "today.welcomeText": {
+    de: "Halte einfach fest, was dich beschäftigt. Die KI macht daraus Aufgabenvorschläge, die du prüfst und übernimmst.",
+    en: "Just capture whatever is on your mind. The AI turns it into task suggestions for you to review and accept.",
+  },
+  "today.captureFirst": { de: "Erste Notiz erfassen", en: "Capture your first note" },
+  "today.emptyTitle": { de: "Keine Aufgaben in dieser Ansicht", en: "No tasks in this view" },
+  "today.emptyText": {
+    de: "Alles ruhig. Neue Rohnotizen landen zuerst im Capture.",
+    en: "All quiet. New raw notes start in capture.",
+  },
+  "filter.all": { de: "Alle", en: "All" },
+  "filter.today": { de: "Heute", en: "Today" },
+  "filter.planned": { de: "Geplant", en: "Planned" },
+  "filter.later": { de: "Später", en: "Later" },
+  "task.overdue": { de: "Überfällig", en: "Overdue" },
+
+  // Capture
+  "capture.title": { de: "Schnellnotiz", en: "Quick note" },
+  "capture.placeholder": {
+    de: "Schreib einfach alles rein – Gedanken, Aufgaben, Notizen, Gesprächsfetzen…",
+    en: "Just write anything – thoughts, tasks, notes, conversation snippets…",
+  },
+  "capture.process": { de: "Mit {model} verarbeiten", en: "Process with {model}" },
+  "capture.processing": { de: "KI verarbeitet...", en: "AI is processing..." },
+  "capture.examples": {
+    de: "Beispiele: „Chef meinte, ich soll bis Freitag nochmal die Präsentation überarbeiten“ oder „Idee: Register-Fälle automatisch clustern“.",
+    en: "Examples: “Boss said I should revise the presentation again by Friday” or “Idea: cluster registry cases automatically”.",
+  },
+  "capture.mic.start": { de: "Notiz einsprechen", en: "Dictate a note" },
+  "capture.mic.stop": { de: "Aufnahme stoppen", en: "Stop recording" },
+  "capture.mic.listening": {
+    de: "Aufnahme läuft – sprich einfach los.",
+    en: "Recording – just start talking.",
+  },
+  "capture.mic.denied": {
+    de: "Mikrofon-Zugriff wurde abgelehnt. Erlaube ihn in den Browser-Einstellungen.",
+    en: "Microphone access was denied. Allow it in your browser settings.",
+  },
+  "capture.mic.error": {
+    de: "Die Spracheingabe hat nicht geklappt. Versuche es erneut.",
+    en: "Speech input failed. Please try again.",
+  },
+
+  // Inbox
+  "inbox.title": { de: "Inbox", en: "Inbox" },
+  "inbox.hint": {
+    de: "Ungeprüfte KI-Vorschläge bleiben hier, bis du sie annimmst, änderst oder ablehnst.",
+    en: "Unreviewed AI suggestions stay here until you accept, edit, or dismiss them.",
+  },
+  "inbox.emptyTitle": { de: "Inbox ist leer", en: "Inbox is empty" },
+  "inbox.emptyText": { de: "Alle Vorschläge sind geprüft.", en: "All suggestions are reviewed." },
+
+  // Projects
+  "projects.title": { de: "Projekte", en: "Projects" },
+  "projects.new": { de: "Neues Projekt anlegen", en: "Create a new project" },
+  "projects.emptyTitle": { de: "Noch keine Projekte", en: "No projects yet" },
+  "projects.emptyText": {
+    de: "Projekte bündeln deine Aufgaben. Die KI schlägt bei neuen Notizen automatisch passende Projekte vor – oder du legst selbst eins an.",
+    en: "Projects bundle your tasks. The AI automatically suggests fitting projects for new notes – or you create one yourself.",
+  },
+  "projects.create": { de: "Projekt anlegen", en: "Create project" },
+  "projects.openCount": { de: "{count} offen", en: "{count} open" },
+  "projects.noDeadline": { de: "Ohne Deadline", en: "No deadline" },
+
+  // Project detail
+  "project.kicker": { de: "Projekt", en: "Project" },
+  "project.progress": { de: "Fortschritt", en: "Progress" },
+  "project.tab.tasks": { de: "Aufgaben", en: "Tasks" },
+  "project.tab.details": { de: "Details", en: "Details" },
+  "project.tab.notes": { de: "Notizen", en: "Notes" },
+  "project.addTask": { de: "Aufgabe hinzufügen", en: "Add task" },
+  "project.aiToggle": { de: "KI-Zuordnung", en: "AI assignment" },
+  "project.aiActive": { de: "Für dieses Projekt aktiv", en: "Active for this project" },
+  "project.aiPaused": { de: "Für dieses Projekt pausiert", en: "Paused for this project" },
+  "project.keywords": { de: "Keywords", en: "Keywords" },
+  "project.noteMeta": { de: "Rohnotiz · {date}", en: "Raw note · {date}" },
+  "project.notesEmpty": {
+    de: "Noch keine Rohnotizen zu diesem Projekt. Sobald die KI Notizen hierher zuordnet, erscheinen sie in dieser Liste.",
+    en: "No raw notes for this project yet. As soon as the AI assigns notes here, they appear in this list.",
+  },
+  "project.edit": { de: "Projekt bearbeiten", en: "Edit project" },
+
+  // Task detail
+  "task.fallbackKicker": { de: "Aufgabe", en: "Task" },
+  "task.status": { de: "Status", en: "Status" },
+  "task.deadline": { de: "Deadline", en: "Due date" },
+  "task.priority": { de: "Priorität", en: "Priority" },
+  "task.project": { de: "Projekt", en: "Project" },
+  "task.noProject": { de: "Ohne Projekt", en: "No project" },
+  "task.done": { de: "Erledigt", en: "Done" },
+  "task.tab.details": { de: "Details", en: "Details" },
+  "task.tab.raw": { de: "Rohnotiz", en: "Raw note" },
+  "task.tab.ai": { de: "KI", en: "AI" },
+  "task.descriptionHeading": { de: "Beschreibung", en: "Description" },
+  "task.noDescription": { de: "Keine Beschreibung hinterlegt.", en: "No description yet." },
+  "task.rawHeading": { de: "Ursprüngliche Rohnotiz", en: "Original raw note" },
+  "task.manualCreated": {
+    de: "Diese Aufgabe wurde manuell erstellt.",
+    en: "This task was created manually.",
+  },
+  "task.aiHeading": { de: "KI-Zusammenfassung", en: "AI summary" },
+  "task.noAi": { de: "Keine KI-Zusammenfassung vorhanden.", en: "No AI summary available." },
+  "task.edit": { de: "Aufgabe bearbeiten", en: "Edit task" },
+  "status.open": { de: "Offen", en: "Open" },
+  "status.in_progress": { de: "In Arbeit", en: "In progress" },
+  "status.done": { de: "Erledigt", en: "Done" },
+  "priority.low": { de: "Niedrig", en: "Low" },
+  "priority.medium": { de: "Mittel", en: "Medium" },
+  "priority.high": { de: "Hoch", en: "High" },
+
+  // Suggestions
+  "sugg.accepted": { de: "Vorschlag übernommen.", en: "Suggestion accepted." },
+  "sugg.rejected": { de: "Vorschlag ignoriert.", en: "Suggestion dismissed." },
+  "sugg.status.newProject": { de: "Neues Projekt vorgeschlagen", en: "New project suggested" },
+  "sugg.status.review": { de: "Rückfrage nötig", en: "Needs review" },
+  "sugg.status.unsure": { de: "Unsicher", en: "Uncertain" },
+  "sugg.status.confident": { de: "Sicher zugeordnet", en: "Confidently assigned" },
+  "sugg.project": { de: "Projekt", en: "Project" },
+  "sugg.deadline": { de: "Deadline", en: "Due date" },
+  "sugg.priority": { de: "Priorität", en: "Priority" },
+  "sugg.source": { de: "Quelle", en: "Source" },
+  "sugg.sourceValue": { de: "Rohnotiz", en: "Raw note" },
+  "sugg.unclear": { de: "Unklar", en: "Unclear" },
+  "sugg.accept": { de: "Übernehmen", en: "Accept" },
+  "sugg.edit": { de: "Bearbeiten", en: "Edit" },
+  "sugg.reassign": { de: "Anderem Projekt zuordnen", en: "Assign to another project" },
+  "sugg.createTask": { de: "Neue Aufgabe erstellen", en: "Create new task" },
+  "sugg.ignore": { de: "Ignorieren", en: "Dismiss" },
+  "sugg.taskLabel": { de: "Aufgabe", en: "Task" },
+  "sugg.newProjectLabel": { de: "Neues Projekt", en: "New project" },
+  "sugg.proposeNew": { de: "Neues Projekt vorschlagen", en: "Suggest a new project" },
+
+  // Task editor
+  "taskEditor.title": { de: "Aufgabe bearbeiten", en: "Edit task" },
+  "editor.titleLabel": { de: "Titel", en: "Title" },
+  "editor.description": { de: "Beschreibung", en: "Description" },
+  "editor.project": { de: "Projekt", en: "Project" },
+  "editor.status": { de: "Status", en: "Status" },
+  "editor.priority": { de: "Priorität", en: "Priority" },
+  "editor.deadline": { de: "Deadline", en: "Due date" },
+
+  // Project editor
+  "projectEditor.createTitle": { de: "Projekt anlegen", en: "Create project" },
+  "projectEditor.editTitle": { de: "Projekt bearbeiten", en: "Edit project" },
+  "projectEditor.keywords": {
+    de: "Keywords (durch Komma getrennt)",
+    en: "Keywords (comma-separated)",
+  },
+  "projectEditor.keywordsPlaceholder": {
+    de: "z. B. kunde, angebot, newsletter",
+    en: "e.g. client, proposal, newsletter",
+  },
+  "projectEditor.aiLabel": {
+    de: "KI darf Notizen diesem Projekt zuordnen",
+    en: "AI may assign notes to this project",
+  },
+  "projectEditor.deleteConfirm.none": {
+    de: "Projekt löschen?",
+    en: "Delete this project?",
+  },
+  "projectEditor.deleteConfirm.one": {
+    de: "Projekt löschen – inklusive {count} Aufgabe?",
+    en: "Delete this project – including {count} task?",
+  },
+  "projectEditor.deleteConfirm.many": {
+    de: "Projekt löschen – inklusive {count} Aufgaben?",
+    en: "Delete this project – including {count} tasks?",
+  },
+  "projectEditor.confirmYes": { de: "Ja, löschen", en: "Yes, delete" },
+
+  // Navigation & insight panel
+  "nav.today": { de: "Heute", en: "Today" },
+  "nav.projects": { de: "Projekte", en: "Projects" },
+  "nav.inbox": { de: "Inbox", en: "Inbox" },
+  "nav.more": { de: "Mehr", en: "More" },
+  "nav.capture": { de: "Schnellnotiz erfassen", en: "Capture quick note" },
+  "nav.captureButton": { de: "Schnell erfassen", en: "Quick capture" },
+  "insight.focus": { de: "Fokus", en: "Focus" },
+  "insight.openTasks.one": { de: "{count} offene Aufgabe", en: "{count} open task" },
+  "insight.openTasks.many": { de: "{count} offene Aufgaben", en: "{count} open tasks" },
+  "insight.philosophy": {
+    de: "Capture bleibt schnell, die Ordnung passiert danach in Vorschlägen und Projekten.",
+    en: "Capture stays fast; organizing happens afterwards in suggestions and projects.",
+  },
+  "insight.newNote": { de: "Neue Rohnotiz", en: "New raw note" },
+  "insight.activeProject": { de: "Aktives Projekt", en: "Active project" },
+  "insight.aiReview": { de: "KI-Prüfung", en: "AI review" },
+  "insight.pending.one": { de: "{count} Vorschlag offen", en: "{count} suggestion open" },
+  "insight.pending.many": { de: "{count} Vorschläge offen", en: "{count} suggestions open" },
+
+  // More / settings
+  "more.title": { de: "Mehr", en: "More" },
+  "more.product": { de: "Produkt", en: "Product" },
+  "more.productValue": { de: "Rote Agenda Webtool", en: "Rote Agenda web tool" },
+  "more.account": { de: "Account", en: "Account" },
+  "more.storage": { de: "Speicherung", en: "Storage" },
+  "more.sync.saving": { de: "Appwrite speichert...", en: "Saving to Appwrite..." },
+  "more.sync.error": { de: "Fehler beim Speichern", en: "Saving failed" },
+  "more.sync.ok": { de: "Alles gespeichert", en: "Everything saved" },
+  "more.aiModel": { de: "KI-Modell", en: "AI model" },
+  "more.language": { de: "Sprache", en: "Language" },
+  "more.theme": { de: "Design", en: "Theme" },
+  "theme.system": { de: "System", en: "System" },
+  "theme.light": { de: "Hell", en: "Light" },
+  "theme.dark": { de: "Dunkel", en: "Dark" },
+  "more.deleteAll": { de: "Alle Daten löschen", en: "Delete all data" },
+  "more.deleteAllTitle": {
+    de: "Wirklich alle Projekte, Aufgaben, Notizen und Vorschläge löschen?",
+    en: "Really delete all projects, tasks, notes and suggestions?",
+  },
+  "more.deleteAllText": {
+    de: "Das kann nicht rückgängig gemacht werden. Dein Account bleibt bestehen.",
+    en: "This cannot be undone. Your account remains.",
+  },
+  "more.deleteAllYes": { de: "Ja, alles löschen", en: "Yes, delete everything" },
+  "more.logout": { de: "Abmelden", en: "Sign out" },
+  "legal.impressum": { de: "Impressum", en: "Legal notice" },
+  "legal.datenschutz": { de: "Datenschutz", en: "Privacy" },
+
+  // Persist labels (sync queue)
+  "entity.task": { de: "Aufgabe", en: "Task" },
+  "entity.taskDelete": { de: "Aufgabe löschen", en: "Delete task" },
+  "entity.project": { de: "Projekt", en: "Project" },
+  "entity.projectNew": { de: "Neues Projekt", en: "New project" },
+  "entity.projectDelete": { de: "Projekt löschen", en: "Delete project" },
+  "entity.suggestion": { de: "KI-Vorschlag", en: "AI suggestion" },
+  "entity.rawNote": { de: "Rohnotiz", en: "Raw note" },
+  "entity.settings": { de: "Einstellungen", en: "Settings" },
+  "entity.deleteAll": { de: "Alle Daten löschen", en: "Delete all data" },
+
+  // Dates
+  "date.none": { de: "Ohne Termin", en: "No date" },
+  "date.yesterday": { de: "Gestern", en: "Yesterday" },
+  "date.today": { de: "Heute", en: "Today" },
+  "date.tomorrow": { de: "Morgen", en: "Tomorrow" },
+
+  // Reset password page
+  "reset.title": { de: "Neues Passwort setzen", en: "Set a new password" },
+  "reset.checking": { de: "Link wird geprüft.", en: "Checking the link." },
+  "reset.invalid": {
+    de: "Dieser Link ist unvollständig oder abgelaufen. Fordere in der App über „Passwort vergessen?“ einen neuen Link an.",
+    en: "This link is incomplete or expired. Request a new one in the app via “Forgot your password?”.",
+  },
+  "reset.backToApp": { de: "Zurück zur App", en: "Back to the app" },
+  "reset.done": {
+    de: "Dein Passwort wurde geändert. Du kannst dich jetzt mit dem neuen Passwort anmelden.",
+    en: "Your password has been changed. You can now sign in with the new password.",
+  },
+  "reset.toLogin": { de: "Zur Anmeldung", en: "Go to sign-in" },
+  "reset.newPassword": { de: "Neues Passwort", en: "New password" },
+  "reset.repeat": { de: "Passwort wiederholen", en: "Repeat password" },
+  "reset.mismatch": {
+    de: "Die Passwörter stimmen nicht überein.",
+    en: "The passwords do not match.",
+  },
+  "reset.error": {
+    de: "Das Passwort konnte nicht gesetzt werden. Fordere ggf. einen neuen Link an.",
+    en: "The password could not be set. Request a new link if needed.",
+  },
+  "reset.submit": { de: "Passwort speichern", en: "Save password" },
+} as const;
+
+export type MessageKey = keyof typeof messages;
+
+export type Translator = (
+  key: MessageKey,
+  params?: Record<string, string | number>,
+) => string;
+
+export function translate(
+  locale: Locale,
+  key: MessageKey,
+  params?: Record<string, string | number>,
+) {
+  let text: string = messages[key][locale];
+
+  if (params) {
+    for (const [name, value] of Object.entries(params)) {
+      text = text.replaceAll(`{${name}}`, String(value));
+    }
+  }
+
+  return text;
+}
+
+const LOCALE_STORAGE_KEY = "rote-agenda-locale";
+
+export function detectDeviceLocale(): Locale {
+  if (typeof window === "undefined") return "de";
+
+  try {
+    const stored = window.localStorage.getItem(LOCALE_STORAGE_KEY);
+    if (stored && isLocale(stored)) return stored;
+  } catch {
+    // localStorage kann fehlen; dann entscheidet die Browsersprache.
+  }
+
+  return window.navigator.language?.toLowerCase().startsWith("de") ? "de" : "en";
+}
+
+export function storeDeviceLocale(locale: Locale) {
+  try {
+    window.localStorage.setItem(LOCALE_STORAGE_KEY, locale);
+  } catch {
+    // Ohne localStorage gilt die Wahl nur für die aktuelle Sitzung.
+  }
+}

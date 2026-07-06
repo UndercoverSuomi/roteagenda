@@ -1,4 +1,5 @@
 import type { AiModelId } from "@/lib/ai-models";
+import type { Locale } from "@/lib/i18n";
 
 export type TaskStatus = "open" | "in_progress" | "done";
 export type TaskPriority = "low" | "medium" | "high";
@@ -60,6 +61,7 @@ export interface AiSuggestion {
 
 export interface UserSettings {
   aiModel: AiModelId;
+  locale: Locale;
 }
 
 export interface AppData {

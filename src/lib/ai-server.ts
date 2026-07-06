@@ -1,4 +1,5 @@
 import { getAiModelLabel, isAiModelId, type AiModelId } from "./ai-models.ts";
+import type { Locale } from "./i18n.ts";
 import type { AiSuggestion, Project, RawNote, TaskPriority } from "./types.ts";
 
 type AiProviderKind = "openai-responses" | "chat-completions";
@@ -45,6 +46,7 @@ type CallAiProviderParams = {
   note: string;
   projects: Pick<Project, "id" | "title" | "description" | "keywords" | "aiEnabled">[];
   today?: string;
+  locale?: Locale;
   fetchFn?: typeof fetch;
 };
 
@@ -221,13 +223,14 @@ export async function callAiProvider({
   note,
   projects,
   today,
+  locale = "de",
   fetchFn = fetch,
 }: CallAiProviderParams): Promise<string> {
-  const prompt = buildPrompt(note, projects, today);
+  const prompt = buildPrompt(note, projects, today, locale);
   const response =
     config.provider === "openai-responses"
       ? await callOpenAiResponses(config, prompt, fetchFn)
-      : await callChatCompletions(config, prompt, fetchFn);
+      : await callChatCompletions(config, prompt, locale, fetchFn);
 
   const payload = await readJsonResponse(response, config.label);
   return extractProviderText(payload);
@@ -358,30 +361,29 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-const GERMAN_WEEKDAYS = [
-  "Sonntag",
-  "Montag",
-  "Dienstag",
-  "Mittwoch",
-  "Donnerstag",
-  "Freitag",
-  "Samstag",
-];
+const WEEKDAY_NAMES: Record<Locale, string[]> = {
+  de: ["Sonntag", "Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag"],
+  en: ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"],
+};
 
-function describeToday(todayIso?: string) {
+function describeToday(todayIso: string | undefined, locale: Locale) {
   const iso =
     todayIso && /^\d{4}-\d{2}-\d{2}$/.test(todayIso)
       ? todayIso
       : new Date().toISOString().slice(0, 10);
-  const weekday = GERMAN_WEEKDAYS[new Date(`${iso}T12:00:00Z`).getUTCDay()];
+  const weekday = WEEKDAY_NAMES[locale][new Date(`${iso}T12:00:00Z`).getUTCDay()];
 
   return `${weekday}, ${iso}`;
 }
 
+const JSON_SHAPE =
+  '{"suggestions":[{"suggestedTitle":"...","suggestedDescription":"...","suggestedProjectId":"project-id | null","suggestedNewProjectTitle":"... | null","confidence":0.0,"priority":"low|medium|high","dueDate":"YYYY-MM-DD | null","reasoning":"...","needsReview":true}]}';
+
 function buildPrompt(
   note: string,
   projects: Pick<Project, "id" | "title" | "description" | "keywords" | "aiEnabled">[],
-  today?: string,
+  today: string | undefined,
+  locale: Locale,
 ) {
   const enabledProjects = projects
     .filter((project) => project.aiEnabled)
@@ -392,16 +394,36 @@ function buildPrompt(
       keywords: project.keywords,
     }));
 
+  if (locale === "en") {
+    return [
+      "You are the structuring AI of Rote Agenda.",
+      `Today is ${describeToday(today, "en")}.`,
+      "Turn the raw note into 1 to 4 concrete task suggestions.",
+      "Respond exclusively with valid JSON in this shape:",
+      JSON_SHAPE,
+      "Use suggestedProjectId only if one of the enabled projects clearly fits.",
+      "If no project fits, set suggestedProjectId to null and suggestedNewProjectTitle to a short project name.",
+      "Convert relative expressions like today, tomorrow, Friday or next week into a concrete dueDate based on today's date.",
+      "Set dueDate to null if no deadline is recognizable.",
+      "Write suggestedTitle, suggestedDescription and reasoning in English.",
+      "Enabled projects:",
+      JSON.stringify(enabledProjects),
+      "Raw note:",
+      note,
+    ].join("\n");
+  }
+
   return [
     "Du bist die strukturierende KI von Rote Agenda.",
-    `Heute ist ${describeToday(today)}.`,
+    `Heute ist ${describeToday(today, "de")}.`,
     "Wandle die Rohnotiz in 1 bis 4 konkrete Aufgabenvorschläge um.",
     "Antworte ausschließlich mit gültigem JSON in dieser Form:",
-    '{"suggestions":[{"suggestedTitle":"...","suggestedDescription":"...","suggestedProjectId":"project-id oder null","suggestedNewProjectTitle":"Name oder null","confidence":0.0,"priority":"low|medium|high","dueDate":"YYYY-MM-DD oder null","reasoning":"kurze Begründung","needsReview":true}]}',
+    JSON_SHAPE,
     "Nutze suggestedProjectId nur, wenn eines der aktivierten Projekte klar passt.",
     "Wenn kein Projekt passt, setze suggestedProjectId auf null und suggestedNewProjectTitle auf einen kurzen Projektnamen.",
     "Rechne relative Angaben wie heute, morgen, Freitag oder nächste Woche vom heutigen Datum aus in ein konkretes dueDate um.",
     "Setze dueDate auf null, wenn keine Deadline erkennbar ist.",
+    "Formuliere suggestedTitle, suggestedDescription und reasoning auf Deutsch.",
     "Aktivierte Projekte:",
     JSON.stringify(enabledProjects),
     "Rohnotiz:",
@@ -433,6 +455,7 @@ async function callOpenAiResponses(
 async function callChatCompletions(
   config: ResolvedAiModelConfig,
   prompt: string,
+  locale: Locale,
   fetchFn: typeof fetch,
 ) {
   if (!config.baseUrl) {
@@ -448,7 +471,9 @@ async function callChatCompletions(
         {
           role: "system",
           content:
-            "Du extrahierst Aufgaben aus Rohnotizen und antwortest ausschließlich mit JSON.",
+            locale === "en"
+              ? "You extract tasks from raw notes and respond exclusively with JSON."
+              : "Du extrahierst Aufgaben aus Rohnotizen und antwortest ausschließlich mit JSON.",
         },
         {
           role: "user",

@@ -5,6 +5,7 @@ import {
   APPWRITE_PROJECT_ID,
 } from "@/lib/appwrite-config";
 import { MAX_NOTE_LENGTH } from "@/lib/ai-models";
+import { isLocale } from "@/lib/i18n";
 import {
   buildProcessingResultFromProviderText,
   callAiProvider,
@@ -19,6 +20,7 @@ type ProcessNoteRequestBody = {
   modelId?: unknown;
   projects?: unknown;
   today?: unknown;
+  locale?: unknown;
 };
 
 // Einfache Kostenbremse pro Nutzer und Server-Instanz.
@@ -55,6 +57,7 @@ export async function POST(request: Request) {
     const modelId = readModelId(body.modelId);
     const projects = readProjects(body.projects);
     const today = readToday(body.today);
+    const locale = readLocale(body.locale);
     const resolved = resolveAiModelConfig(modelId);
 
     if (!resolved.ok) {
@@ -66,6 +69,7 @@ export async function POST(request: Request) {
       note,
       projects,
       today,
+      locale,
     });
     const result = buildProcessingResultFromProviderText({
       note,
@@ -164,6 +168,10 @@ function readToday(value: unknown) {
   }
 
   return undefined;
+}
+
+function readLocale(value: unknown) {
+  return typeof value === "string" && isLocale(value) ? value : "de";
 }
 
 function readModelId(value: unknown) {

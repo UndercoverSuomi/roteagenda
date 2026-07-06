@@ -2,12 +2,14 @@ import { account } from "@/lib/appwrite";
 import type { AiModelId } from "@/lib/ai-models";
 import type { AiProcessingResult } from "@/lib/ai-server";
 import { toIsoDate } from "@/lib/date";
+import type { Locale } from "@/lib/i18n";
 import type { Project } from "@/lib/types";
 
 type ProcessNoteRequest = {
   note: string;
   modelId: AiModelId;
   projects: Project[];
+  locale: Locale;
 };
 
 type ErrorResponse = {
@@ -18,6 +20,7 @@ export async function processRawNoteWithConfiguredAi({
   note,
   modelId,
   projects,
+  locale,
 }: ProcessNoteRequest): Promise<AiProcessingResult> {
   const jwt = await account.createJWT({ duration: 900 });
   const response = await fetch("/api/ai/process-note", {
@@ -32,6 +35,7 @@ export async function processRawNoteWithConfiguredAi({
       modelId,
       projects,
       today: toIsoDate(new Date()),
+      locale,
     }),
   });
 
