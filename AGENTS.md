@@ -17,6 +17,15 @@ This version has breaking changes — APIs, conventions, and file structure may 
 - `public/sw.js` — Service Worker für die Offline-Shell; cached nur Same-Origin-GETs, nie `/api/` oder Cross-Origin (Appwrite/Google). Registrierung nur in Produktion.
 - `src/app/api/ai/` — Route Handler für KI-Verarbeitung und Transkription (Appwrite-JWT-Prüfung + Rate-Limit).
 
+# Playbooks
+
+Ausführliche, harness-unabhängige Playbooks liegen als Markdown unter `.claude/skills/*/SKILL.md` — vor der Arbeit lesen:
+
+- `roteagenda-dev-workflow` — Checks, Browser-Verifikation, Testkonto-Etikette, Fallstricke.
+- `appwrite-schema-changes` — drei Code-Stellen, MariaDB-Zeilenlimit/TEXT-Trick, Rollout-Reihenfolge.
+- `roteagenda-ai-features` — Muster für neue KI-Routen inkl. OpenRouter-Katalog-Check.
+- `browser-eval-testing` — React-E2E per Konsolen-Eval (projekt-unabhängig).
+
 # Konventionen
 
 - Notizen sind die Kern-Entität (`Note` in `types.ts`, AppData-Feld `notes`); die Appwrite-Collection heißt aus historischen Gründen weiterhin `rawNotes` (Mapping in `appwrite-config.ts`). Die KI-Veredelung läuft über `/api/ai/enhance-note` und liefert Anreicherung plus Aufgaben-/Terminvorschläge in einem Aufruf.
