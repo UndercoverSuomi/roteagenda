@@ -15,7 +15,10 @@ import {
   parseProviderJson,
   resolveAiModelConfig,
   resolveTranscriptionConfig,
+  resolveVideoConfig,
   resolveVisionConfig,
+  summarizeWebText,
+  summarizeYouTubeVideo,
   transcribeAudio,
 } from "./ai-server.ts";
 
@@ -458,6 +461,75 @@ test("photo extraction requires the openrouter key and sends the image", async (
   assert.equal(body.model, "google/gemini-2.5-pro");
   const imagePart = body.messages[0].content.find((part) => part.type === "image_url");
   assert.equal(imagePart.image_url.url, "data:image/jpeg;base64,QUJD");
+});
+
+test("web summaries send capped page text without response_format", async () => {
+  const calls = [];
+  const text = await summarizeWebText({
+    config: GLM_TEST_CONFIG,
+    pageText: `Wichtiger Artikel. ${"x".repeat(20000)}`,
+    url: "https://example.com/artikel",
+    title: "Beispiel-Artikel",
+    locale: "de",
+    fetchFn: async (url, init) => {
+      calls.push({ init });
+      return chatReply(" Kompakte Zusammenfassung. ");
+    },
+  });
+
+  assert.equal(text, "Kompakte Zusammenfassung.");
+  const body = JSON.parse(calls[0].init.body);
+  assert.equal(body.response_format, undefined);
+  const prompt = body.messages[0].content;
+  assert.match(prompt, /Beispiel-Artikel/);
+  assert.match(prompt, /https:\/\/example\.com\/artikel/);
+  assert.ok(prompt.length < 14000, "Seitentext muss gekappt sein");
+});
+
+test("youtube summaries send the video url to gemini via ai studio", async () => {
+  const missing = resolveVideoConfig({});
+  assert.equal(missing.ok, false);
+  assert.match(missing.error, /OPENROUTER_API_KEY/);
+
+  const calls = [];
+  const text = await summarizeYouTubeVideo({
+    url: "https://www.youtube.com/watch?v=jNQXAC9IVRw",
+    title: "Me at the zoo",
+    author: "jawed",
+    locale: "de",
+    env: { OPENROUTER_API_KEY: "sk-or-test" },
+    fetchFn: async (url, init) => {
+      calls.push({ url: String(url), init });
+      return chatReply(" Zusammenfassung des Videos. ");
+    },
+  });
+
+  assert.equal(text, "Zusammenfassung des Videos.");
+  assert.equal(calls[0].url, "https://openrouter.ai/api/v1/chat/completions");
+  const body = JSON.parse(calls[0].init.body);
+  assert.equal(body.model, "google/gemini-3.1-flash-lite");
+  assert.deepEqual(body.provider, { order: ["google-ai-studio"] });
+  const videoPart = body.messages[0].content.find((part) => part.type === "video_url");
+  assert.equal(videoPart.video_url.url, "https://www.youtube.com/watch?v=jNQXAC9IVRw");
+  const textPart = body.messages[0].content.find((part) => part.type === "text");
+  assert.match(textPart.text, /Me at the zoo/);
+});
+
+test("the youtube video model can be overridden via env", async () => {
+  const calls = [];
+  await summarizeYouTubeVideo({
+    url: "https://youtu.be/jNQXAC9IVRw",
+    env: {
+      OPENROUTER_API_KEY: "sk-or-test",
+      OPENROUTER_VIDEO_MODEL: "google/gemini-3.5-flash",
+    },
+    fetchFn: async (url, init) => {
+      calls.push({ init });
+      return chatReply("ok");
+    },
+  });
+
+  assert.equal(JSON.parse(calls[0].init.body).model, "google/gemini-3.5-flash");
 });
 
 test("daily briefing sends tasks as plain-text request without response_format", async () => {

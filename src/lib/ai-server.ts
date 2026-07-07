@@ -811,12 +811,15 @@ function createId(prefix: string) {
     .slice(2, 8)}`;
 }
 
-// ── Medien über OpenRouter (Sprachnotiz + Foto-Notiz) ───────────────
+// ── Medien über OpenRouter (Sprachnotiz + Foto-Notiz + Video) ───────
 
 // MiMo-V2.5 (nicht -Pro!) kann Audio- UND Bild-Eingabe und ist deutlich
 // günstiger als Gemini 2.5 Flash. Override via Env möglich.
 const DEFAULT_TRANSCRIBE_MODEL = "xiaomi/mimo-v2.5";
 const DEFAULT_VISION_MODEL = "xiaomi/mimo-v2.5";
+// YouTube-URLs versteht via OpenRouter nur Gemini (Provider "Google AI
+// Studio"); 3.1 Flash Lite ist der Preis/Leistungs-Sweet-Spot (GA, 1M ctx).
+const DEFAULT_VIDEO_MODEL = "google/gemini-3.1-flash-lite";
 
 type TranscribeParams = {
   audioBase64: string;
@@ -876,6 +879,15 @@ export function resolveVisionConfig(env: Env = process.env): MediaResolveResult 
     "OPENROUTER_VISION_MODEL",
     DEFAULT_VISION_MODEL,
     "Die Foto-Erkennung",
+  );
+}
+
+export function resolveVideoConfig(env: Env = process.env): MediaResolveResult {
+  return resolveOpenRouterMedia(
+    env,
+    "OPENROUTER_VIDEO_MODEL",
+    DEFAULT_VIDEO_MODEL,
+    "Die Video-Analyse",
   );
 }
 
@@ -972,6 +984,138 @@ export async function extractImageText({
   }
 
   return text;
+}
+
+// ── URL/YouTube → Notiz-Zusammenfassung ─────────────────────────────
+
+const MAX_PAGE_TEXT = 12_000;
+
+type SummarizeWebParams = {
+  config: ResolvedAiModelConfig;
+  pageText: string;
+  url: string;
+  title?: string | null;
+  locale?: Locale;
+  fetchFn?: typeof fetch;
+};
+
+// Fasst extrahierten Seitentext mit dem Konto-Modell als Notiz zusammen.
+export async function summarizeWebText({
+  config,
+  pageText,
+  url,
+  title,
+  locale = "de",
+  fetchFn = fetch,
+}: SummarizeWebParams): Promise<string> {
+  const text = pageText.slice(0, MAX_PAGE_TEXT);
+
+  const prompt =
+    locale === "en"
+      ? [
+          "Summarize this web page as a compact note (at most ~180 words):",
+          "key statements, important facts, and explicitly mention any tasks, dates or deadlines that appear.",
+          "Plain text with paragraphs or simple dashes, no markdown syntax, no preamble.",
+          `Respond in English.`,
+          title ? `Page title: ${title}` : "",
+          `URL: ${url}`,
+          "Page text (possibly truncated):",
+          text,
+        ]
+      : [
+          "Fasse diese Webseite als kompakte Notiz zusammen (maximal ~180 Wörter):",
+          "Kernaussagen, wichtige Fakten, und nenne explizit alle erwähnten Aufgaben, Termine oder Fristen.",
+          "Reiner Text mit Absätzen oder einfachen Spiegelstrichen, keine Markdown-Syntax, keine Vorrede.",
+          "Antworte auf Deutsch.",
+          title ? `Seitentitel: ${title}` : "",
+          `URL: ${url}`,
+          "Seitentext (ggf. gekürzt):",
+          text,
+        ];
+
+  const response = await requestProvider(
+    config,
+    { user: prompt.filter(Boolean).join("\n") },
+    { maxTokens: 600, json: false },
+    fetchFn,
+  );
+
+  const payload = await readJsonResponse(response, config.label);
+  const summary = extractProviderText(payload).trim();
+  if (!summary) {
+    throw new Error("Die Zusammenfassung hat keinen Text geliefert.");
+  }
+
+  return summary;
+}
+
+type SummarizeYouTubeParams = {
+  url: string;
+  title?: string | null;
+  author?: string | null;
+  locale?: Locale;
+  env?: Env;
+  fetchFn?: typeof fetch;
+};
+
+// Lässt Gemini das YouTube-Video tatsächlich "ansehen" (Frames + Audio).
+// Nur der Provider "Google AI Studio" akzeptiert YouTube-URLs.
+export async function summarizeYouTubeVideo({
+  url,
+  title,
+  author,
+  locale = "de",
+  env = process.env,
+  fetchFn = fetch,
+}: SummarizeYouTubeParams): Promise<string> {
+  const config = resolveVideoConfig(env);
+  if (!config.ok) {
+    throw new Error(config.error);
+  }
+
+  const context = [title, author ? `(${author})` : ""].filter(Boolean).join(" ");
+  const instruction =
+    locale === "en"
+      ? [
+          "Watch this video and summarize it as a compact note (at most ~200 words):",
+          "core statements, structure/chapters, and explicitly mention any tasks, dates or recommendations.",
+          "Plain text, no markdown syntax, no preamble. Respond in English.",
+          context ? `Video: ${context}` : "",
+        ]
+      : [
+          "Sieh dir dieses Video an und fasse es als kompakte Notiz zusammen (maximal ~200 Wörter):",
+          "Kernaussagen, Struktur/Kapitel, und nenne explizit erwähnte Aufgaben, Termine oder Empfehlungen.",
+          "Reiner Text, keine Markdown-Syntax, keine Vorrede. Antworte auf Deutsch.",
+          context ? `Video: ${context}` : "",
+        ];
+
+  const response = await fetchFn(joinUrl(config.baseUrl, "chat/completions"), {
+    method: "POST",
+    headers: providerHeaders(config.apiKey),
+    body: JSON.stringify({
+      model: config.model,
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: instruction.filter(Boolean).join("\n") },
+            { type: "video_url", video_url: { url } },
+          ],
+        },
+      ],
+      max_tokens: 800,
+      // Vertex akzeptiert keine Video-URLs — AI Studio bevorzugen.
+      provider: { order: ["google-ai-studio"] },
+    }),
+  });
+
+  const payload = await readJsonResponse(response, "Video-Analyse");
+  const summary = extractProviderText(payload).trim();
+  if (!summary) {
+    throw new Error("Die Video-Analyse hat keinen Inhalt geliefert.");
+  }
+
+  return summary;
 }
 
 // ── Tagesbriefing ────────────────────────────────────────────────────

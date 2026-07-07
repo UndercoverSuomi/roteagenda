@@ -203,6 +203,16 @@ const messages = {
     en: "Capture thoughts, ideas and snippets. The AI rewrites them, adds tags, links related notes and detects tasks and events.",
   },
   "notes.create": { de: "Notiz anlegen", en: "Create note" },
+  "notes.importPlaceholder": {
+    de: "Link einfügen (Artikel oder YouTube)…",
+    en: "Paste a link (article or YouTube)…",
+  },
+  "notes.importGo": { de: "Zusammenfassen", en: "Summarize" },
+  "notes.importImage": {
+    de: "Screenshot/Foto als Notiz",
+    en: "Screenshot/photo as note",
+  },
+  "notes.importing": { de: "Wird analysiert...", en: "Analyzing..." },
   "notes.pinned": { de: "Angepinnt", en: "Pinned" },
   "notes.others": { de: "Weitere", en: "Others" },
   "notes.untitled": { de: "Ohne Titel", en: "Untitled" },

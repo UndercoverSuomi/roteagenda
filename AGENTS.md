@@ -15,7 +15,8 @@ This version has breaking changes — APIs, conventions, and file structure may 
 - `src/lib/sync-queue.ts` + `offline-store.ts` — Schreibzugriffe sind serialisierbare `SyncOp`-Objekte (definiert in `appwrite-store.ts`), die in localStorage überleben; `offline-store.ts` cached zusätzlich den letzten Datenstand pro Nutzer.
 - `src/lib/realtime.ts` — purer Reducer für Appwrite-Realtime-Events; `appwrite-documents.ts` wandelt Appwrite-Dokumente in App-Objekte (pure, node-testbar).
 - `public/sw.js` — Service Worker für die Offline-Shell; cached nur Same-Origin-GETs, nie `/api/` oder Cross-Origin (Appwrite/Google). Registrierung nur in Produktion.
-- `src/app/api/ai/` — Route Handler für KI-Verarbeitung und Transkription (Appwrite-JWT-Prüfung + Rate-Limit).
+- `src/app/api/ai/` — Route Handler für KI-Verarbeitung, Transkription, Foto-OCR, Link-/Video-Zusammenfassung und Briefing (Appwrite-JWT-Prüfung + Rate-Limit).
+- `src/lib/web-content.ts` — nur serverseitig (node:dns): SSRF-Härtung für eingeworfene URLs, Seitenabruf mit Limits, HTML→Text, YouTube-Erkennung/oEmbed.
 
 # Playbooks
 

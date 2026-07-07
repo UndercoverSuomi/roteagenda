@@ -1,4 +1,7 @@
-import { Camera, Link2, Pin, Plus, Sparkles, StickyNote } from "lucide-react";
+"use client";
+
+import { Camera, Link2, Loader2, Pin, Plus, Sparkles, StickyNote } from "lucide-react";
+import { useRef } from "react";
 import { cx, noteDisplayTitle } from "@/components/app-helpers";
 import { ScreenHeader } from "@/components/ui/primitives";
 import type { Translator } from "@/lib/i18n";
@@ -12,20 +15,34 @@ const SOURCE_ICONS: Partial<Record<NoteSource, typeof Link2>> = {
 export function NotesScreen({
   notes,
   projectById,
+  importUrl,
+  isImporting,
+  importError,
   t,
   onOpenNote,
   onCreateNote,
   onTogglePin,
+  onImportUrlChange,
+  onImportUrl,
+  onImportImage,
 }: {
   notes: Note[];
   projectById: Map<string, Project>;
+  importUrl: string;
+  isImporting: boolean;
+  importError: string | null;
   t: Translator;
   onOpenNote: (noteId: string) => void;
   onCreateNote: () => void;
   onTogglePin: (noteId: string) => void;
+  onImportUrlChange: (value: string) => void;
+  onImportUrl: () => void;
+  onImportImage: (file: File) => void;
 }) {
+  const imageInputRef = useRef<HTMLInputElement | null>(null);
   const pinned = notes.filter((note) => note.pinned);
   const others = notes.filter((note) => !note.pinned);
+  const canImport = /^https?:\/\/\S+$/i.test(importUrl.trim());
 
   return (
     <div className="flex flex-1 flex-col px-6 pt-3 md:px-8 md:pt-8 lg:px-10">
@@ -36,6 +53,62 @@ export function NotesScreen({
         rightLabel={t("notes.new")}
         onRight={onCreateNote}
       />
+
+      <div className="mt-5 rounded-[7px] border border-[var(--line)] bg-[var(--surface)] p-3">
+        <div className="flex items-center gap-2">
+          <div className="flex min-w-0 flex-1 items-center gap-2 rounded-[5px] border border-[var(--line)] bg-[var(--field)] px-3">
+            <Link2 className="h-4 w-4 shrink-0 text-[var(--muted)]" />
+            <input
+              value={importUrl}
+              onChange={(event) => onImportUrlChange(event.target.value)}
+              placeholder={t("notes.importPlaceholder")}
+              disabled={isImporting}
+              className="h-10 w-full bg-transparent text-[13px] outline-none placeholder:text-[var(--muted)]"
+            />
+          </div>
+          <button
+            type="button"
+            onClick={onImportUrl}
+            disabled={!canImport || isImporting}
+            className="flex h-10 shrink-0 items-center gap-2 rounded-[5px] bg-[var(--red)] px-3 text-[12px] font-bold text-white disabled:opacity-50"
+          >
+            {isImporting ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Sparkles className="h-4 w-4" />
+            )}
+            <span className="hidden sm:inline">
+              {isImporting ? t("notes.importing") : t("notes.importGo")}
+            </span>
+          </button>
+          <button
+            type="button"
+            onClick={() => imageInputRef.current?.click()}
+            disabled={isImporting}
+            aria-label={t("notes.importImage")}
+            title={t("notes.importImage")}
+            className="grid h-10 w-10 shrink-0 place-items-center rounded-[5px] border border-[var(--line-strong)] text-[var(--ink)] transition hover:bg-[var(--surface-strong)] disabled:opacity-50"
+          >
+            <Camera className="h-4 w-4" />
+          </button>
+          <input
+            ref={imageInputRef}
+            type="file"
+            accept="image/*"
+            className="hidden"
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              event.target.value = "";
+              if (file) onImportImage(file);
+            }}
+          />
+        </div>
+        {importError ? (
+          <p className="mt-2 rounded-[5px] border border-[var(--red)] bg-[var(--surface-strong)] p-2.5 text-[12px] leading-5 text-[var(--red)]">
+            {importError}
+          </p>
+        ) : null}
+      </div>
 
       {!notes.length ? (
         <div className="mt-6 rounded-[7px] border border-dashed border-[var(--line-strong)] p-5">

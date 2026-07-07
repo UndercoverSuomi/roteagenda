@@ -38,7 +38,13 @@ import { DesktopInsightPanel } from "@/components/ui/insight-panel";
 import { BottomNav, DesktopSidebar } from "@/components/ui/navigation";
 import { AppShellMessage, WorkSurface } from "@/components/ui/primitives";
 import { UndoToast } from "@/components/ui/undo-toast";
-import { enhanceNoteWithConfiguredAi, fetchDailyBriefing } from "@/lib/ai-client";
+import {
+  enhanceNoteWithConfiguredAi,
+  extractPhotoText,
+  fetchDailyBriefing,
+  summarizeUrl,
+} from "@/lib/ai-client";
+import { fileToJpegBase64 } from "@/lib/image";
 import { getAiModelLabel, MAX_NOTE_LENGTH, type AiModelId } from "@/lib/ai-models";
 import { createEmptyAppData } from "@/lib/app-data";
 import { buildAppUrl, parseAppUrl } from "@/lib/app-url";
@@ -176,6 +182,10 @@ export function RoteAgendaApp() {
   const [enhancingNoteIds, setEnhancingNoteIds] = useState<Set<string>>(new Set());
   const [enhanceOutcome, setEnhanceOutcome] = useState<EnhanceOutcome | null>(null);
   const [enhanceError, setEnhanceError] = useState<EnhanceError | null>(null);
+  // Import von Links/Screenshots auf dem Notizen-Screen.
+  const [noteImportUrl, setNoteImportUrl] = useState("");
+  const [isImportingNote, setIsImportingNote] = useState(false);
+  const [noteImportError, setNoteImportError] = useState<string | null>(null);
   const [undo, setUndo] = useState<UndoState | null>(null);
   const undoTimerRef = useRef<number | null>(null);
   const userIdRef = useRef("");
@@ -680,6 +690,84 @@ export function RoteAgendaApp() {
     }
   }
 
+  // Legt eine importierte Notiz an (URL/Screenshot), öffnet sie und
+  // stößt die normale KI-Veredelung an.
+  function createNoteFromImport(input: {
+    content: string;
+    title: string;
+    source: Note["source"];
+    sourceUrl: string | null;
+  }): Note {
+    const now = new Date().toISOString();
+    const note: Note = {
+      id: createLocalId("note"),
+      title: input.title,
+      content: input.content,
+      enhanced: "",
+      tags: [],
+      projectId: null,
+      relatedNoteIds: [],
+      source: input.source,
+      sourceUrl: input.sourceUrl,
+      pinned: false,
+      processed: false,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    setData((current) => ({ ...current, notes: [note, ...current.notes] }));
+    persist(t("entity.note"), { kind: "upsert", collection: "notes", item: note });
+    goTo("note", { noteId: note.id });
+    void runNoteEnhancement(note).catch(() => undefined);
+
+    return note;
+  }
+
+  async function handleImportUrl() {
+    const url = noteImportUrl.trim();
+    if (!/^https?:\/\/\S+$/i.test(url)) return;
+
+    setNoteImportError(null);
+    setIsImportingNote(true);
+    try {
+      const result = await summarizeUrl({
+        url,
+        modelId: data.settings.aiModel,
+        locale,
+      });
+      setNoteImportUrl("");
+      createNoteFromImport({
+        content: result.text,
+        title: result.title ?? "",
+        source: "url",
+        sourceUrl: url,
+      });
+    } catch (error) {
+      setNoteImportError(readErrorMessage(error, t));
+    } finally {
+      setIsImportingNote(false);
+    }
+  }
+
+  async function handleImportImage(file: File) {
+    setNoteImportError(null);
+    setIsImportingNote(true);
+    try {
+      const imageBase64 = await fileToJpegBase64(file);
+      const text = await extractPhotoText({ imageBase64, locale });
+      createNoteFromImport({
+        content: text,
+        title: "",
+        source: "image",
+        sourceUrl: null,
+      });
+    } catch (error) {
+      setNoteImportError(readErrorMessage(error, t));
+    } finally {
+      setIsImportingNote(false);
+    }
+  }
+
   function toggleNotePin(noteId: string) {
     const target = data.notes.find((note) => note.id === noteId);
     if (!target) return;
@@ -705,6 +793,29 @@ export function RoteAgendaApp() {
     setCaptureError(null);
     setCaptureNotice(null);
     setIsProcessingNote(true);
+
+    // Reine URL? Dann den Link-Import-Weg nehmen (Seite/Video zusammenfassen).
+    if (/^https?:\/\/\S+$/i.test(trimmed)) {
+      try {
+        const result = await summarizeUrl({
+          url: trimmed,
+          modelId: data.settings.aiModel,
+          locale,
+        });
+        setCaptureText("");
+        createNoteFromImport({
+          content: result.text,
+          title: result.title ?? "",
+          source: "url",
+          sourceUrl: trimmed,
+        });
+      } catch (error) {
+        setCaptureError(readErrorMessage(error, t));
+      } finally {
+        setIsProcessingNote(false);
+      }
+      return;
+    }
 
     // Die Notiz existiert sofort — auch wenn die KI danach scheitert.
     const now = new Date().toISOString();
@@ -1179,6 +1290,8 @@ export function RoteAgendaApp() {
     setCaptureNotice(null);
     setEnhanceOutcome(null);
     setEnhanceError(null);
+    setNoteImportUrl("");
+    setNoteImportError(null);
     setScreen(hasSeenWelcome() ? "today" : "welcome");
     if (typeof window !== "undefined") {
       window.history.replaceState(null, "", "/");
@@ -1359,10 +1472,16 @@ export function RoteAgendaApp() {
         <NotesScreen
           notes={data.notes}
           projectById={projectById}
+          importUrl={noteImportUrl}
+          isImporting={isImportingNote}
+          importError={noteImportError}
           t={t}
           onOpenNote={openNote}
           onCreateNote={createBlankNote}
           onTogglePin={toggleNotePin}
+          onImportUrlChange={setNoteImportUrl}
+          onImportUrl={() => void handleImportUrl()}
+          onImportImage={(file) => void handleImportImage(file)}
         />
       );
     }

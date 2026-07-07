@@ -8,6 +8,7 @@ Die Oberflaeche ist zuerst als responsives Webtool gedacht: schnell am Handy erf
 
 - Registrieren oder anmelden (inkl. Passwort-zuruecksetzen per E-Mail)
 - Notiz anlegen — im Notizen-Grid, per Schnellnotiz, per Mikrofon eingesprochen (Transkription ueber ein audiofaehiges OpenRouter-Modell, Standard `xiaomi/mimo-v2.5`, Override via `OPENROUTER_TRANSCRIBE_MODEL`) oder als Foto eines Notizzettels (OCR ueber ein bildfaehiges Modell, gleicher Standard, Override via `OPENROUTER_VISION_MODEL`)
+- Links einwerfen (Notizen-Screen oder Schnellnotiz): Artikel werden serverseitig geladen (mit SSRF-Schutz) und zusammengefasst; bei YouTube-Links sieht sich Gemini das Video wirklich an (Bild + Ton, Standard `google/gemini-3.1-flash-lite`, Override via `OPENROUTER_VIDEO_MODEL`) — das Ergebnis wird als Notiz mit Quell-Link gespeichert
 - Die KI veredelt jede neue Notiz automatisch: Titel und ausformulierte Fassung, 1-5 Tags, Projektzuordnung, Verlinkung mit verwandten Notizen (auch manuell erneut ausloesbar)
 - Klingt etwas nach einem Termin ("Arzttermin Praxis41 morgen um 9"), schlaegt die KI einen Kalendereintrag mit Uhrzeit vor — Uebernahme geht an den Google Kalender — plus sinnvolle Vorbereitungs-Aufgaben als eigene Vorschlaege
 - Aufgabenvorschlaege pruefen, bearbeiten, uebernehmen oder ignorieren; die KI kennt Projekte und offene Aufgaben und schlaegt keine Duplikate vor
@@ -95,7 +96,7 @@ MINIMAX_API_KEY=...
 DEEPSEEK_API_KEY=...
 ```
 
-Optionale Overrides fuer Base-URLs und Modell-Slugs stehen in [.env.example](.env.example). Die Route `/api/ai/process-note` verlangt eine gueltige Appwrite-Session (JWT), begrenzt Notizen auf 4000 Zeichen und drosselt auf 20 Anfragen pro Nutzer und 10 Minuten. Auch `/api/ai/transcribe`, `/api/ai/extract-image` und `/api/ai/daily-briefing` verlangen eine gueltige Session und sind pro Nutzer gedrosselt.
+Optionale Overrides fuer Base-URLs und Modell-Slugs stehen in [.env.example](.env.example). Alle KI-Routen (`/api/ai/enhance-note`, `/api/ai/transcribe`, `/api/ai/extract-image`, `/api/ai/summarize-url`, `/api/ai/daily-briefing`) verlangen eine gueltige Appwrite-Session (JWT), validieren und begrenzen ihre Eingaben und sind pro Nutzer gedrosselt.
 
 ### 3. Entwicklung
 
