@@ -194,6 +194,57 @@ const messages = {
     en: "No new tasks detected – everything in the note already exists as an open task.",
   },
 
+  // Notizen
+  "notes.title": { de: "Notizen", en: "Notes" },
+  "notes.new": { de: "Neue Notiz anlegen", en: "Create a new note" },
+  "notes.emptyTitle": { de: "Noch keine Notizen", en: "No notes yet" },
+  "notes.emptyText": {
+    de: "Halte Gedanken, Ideen und Gesprächsfetzen fest. Die KI formuliert sie aus, vergibt Tags, verlinkt verwandte Notizen und erkennt Aufgaben und Termine.",
+    en: "Capture thoughts, ideas and snippets. The AI rewrites them, adds tags, links related notes and detects tasks and events.",
+  },
+  "notes.create": { de: "Notiz anlegen", en: "Create note" },
+  "notes.pinned": { de: "Angepinnt", en: "Pinned" },
+  "notes.others": { de: "Weitere", en: "Others" },
+  "notes.untitled": { de: "Ohne Titel", en: "Untitled" },
+  "note.kicker": { de: "Notiz", en: "Note" },
+  "note.edit": { de: "Notiz bearbeiten", en: "Edit note" },
+  "note.pin": { de: "Anpinnen", en: "Pin" },
+  "note.unpin": { de: "Lösen", en: "Unpin" },
+  "note.enhancedHeading": { de: "Ausformuliert", en: "Refined" },
+  "note.originalHeading": { de: "Original", en: "Original" },
+  "note.relatedHeading": { de: "Verknüpfte Notizen", en: "Linked notes" },
+  "note.tasksHeading": { de: "Aufgaben aus dieser Notiz", en: "Tasks from this note" },
+  "note.enhance": { de: "Mit KI verarbeiten", en: "Process with AI" },
+  "note.enhanceAgain": { de: "Erneut mit KI verarbeiten", en: "Process with AI again" },
+  "note.enhancing": { de: "KI verarbeitet...", en: "AI is processing..." },
+  "note.notProcessed": {
+    de: "Diese Notiz wurde noch nicht von der KI verarbeitet.",
+    en: "This note has not been processed by the AI yet.",
+  },
+  "note.suggestionsReady.one": {
+    de: "{count} neuer Vorschlag liegt in der Inbox.",
+    en: "{count} new suggestion is waiting in the inbox.",
+  },
+  "note.suggestionsReady.many": {
+    de: "{count} neue Vorschläge liegen in der Inbox.",
+    en: "{count} new suggestions are waiting in the inbox.",
+  },
+  "note.openInbox": { de: "Zur Inbox", en: "Open inbox" },
+  "note.sourceLabel": { de: "Quelle", en: "Source" },
+  "note.source.manual": { de: "Manuell", en: "Manual" },
+  "note.source.capture": { de: "Schnellnotiz", en: "Quick capture" },
+  "note.source.url": { de: "Link", en: "Link" },
+  "note.source.image": { de: "Foto", en: "Photo" },
+  "noteEditor.createTitle": { de: "Notiz anlegen", en: "Create note" },
+  "noteEditor.editTitle": { de: "Notiz bearbeiten", en: "Edit note" },
+  "noteEditor.content": { de: "Inhalt", en: "Content" },
+  "noteEditor.tags": {
+    de: "Tags (durch Komma getrennt)",
+    en: "Tags (comma-separated)",
+  },
+  "noteEditor.noProject": { de: "Ohne Projekt", en: "No project" },
+  "undo.noteDeleted": { de: "Notiz gelöscht.", en: "Note deleted." },
+
   // Inbox
   "inbox.title": { de: "Inbox", en: "Inbox" },
   "inbox.hint": {
@@ -219,7 +270,7 @@ const messages = {
   },
   "search.tasks": { de: "Aufgaben", en: "Tasks" },
   "search.projects": { de: "Projekte", en: "Projects" },
-  "search.notes": { de: "Rohnotizen", en: "Raw notes" },
+  "search.notes": { de: "Notizen", en: "Notes" },
 
   // Projects
   "projects.title": { de: "Projekte", en: "Projects" },
@@ -287,6 +338,17 @@ const messages = {
   "sugg.status.review": { de: "Rückfrage nötig", en: "Needs review" },
   "sugg.status.unsure": { de: "Unsicher", en: "Uncertain" },
   "sugg.status.confident": { de: "Sicher zugeordnet", en: "Confidently assigned" },
+  "sugg.status.event": { de: "Terminvorschlag", en: "Event suggestion" },
+  "sugg.eventTime": { de: "Termin", en: "When" },
+  "sugg.eventStart": { de: "Beginn", en: "Start" },
+  "sugg.acceptEvent": {
+    de: "In Google Kalender übernehmen",
+    en: "Add to Google Calendar",
+  },
+  "sugg.eventAccepted": {
+    de: "Termin an Google Kalender übergeben.",
+    en: "Event handed to Google Calendar.",
+  },
   "sugg.project": { de: "Projekt", en: "Project" },
   "sugg.deadline": { de: "Deadline", en: "Due date" },
   "sugg.priority": { de: "Priorität", en: "Priority" },
@@ -368,6 +430,7 @@ const messages = {
 
   // Navigation & insight panel
   "nav.today": { de: "Heute", en: "Today" },
+  "nav.notes": { de: "Notizen", en: "Notes" },
   "nav.projects": { de: "Projekte", en: "Projects" },
   "nav.inbox": { de: "Inbox", en: "Inbox" },
   "nav.search": { de: "Suche", en: "Search" },
@@ -428,7 +491,8 @@ const messages = {
   "entity.projectNew": { de: "Neues Projekt", en: "New project" },
   "entity.projectDelete": { de: "Projekt löschen", en: "Delete project" },
   "entity.suggestion": { de: "KI-Vorschlag", en: "AI suggestion" },
-  "entity.rawNote": { de: "Rohnotiz", en: "Raw note" },
+  "entity.note": { de: "Notiz", en: "Note" },
+  "entity.noteDelete": { de: "Notiz löschen", en: "Delete note" },
   "entity.settings": { de: "Einstellungen", en: "Settings" },
   "entity.deleteAll": { de: "Alle Daten löschen", en: "Delete all data" },
 

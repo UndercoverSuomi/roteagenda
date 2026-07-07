@@ -19,7 +19,7 @@ export function readCachedAppData(): CachedAppData | null {
   if (!isRecord(value.data)) return null;
 
   const data = value.data;
-  const listsOk = ["projects", "tasks", "rawNotes", "suggestions"].every((key) =>
+  const listsOk = ["projects", "tasks", "notes", "suggestions"].every((key) =>
     Array.isArray(data[key]),
   );
   if (!listsOk || !isRecord(data.user) || !isRecord(data.settings)) return null;

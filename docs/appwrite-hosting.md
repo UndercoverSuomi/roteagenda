@@ -35,9 +35,9 @@ Nur relevant, falls Collections manuell angelegt werden. Textfelder, die leer se
 
 **tasks:** `id` (string, required), `title` (string, required), `description` (string), `projectId` (string, required), `status` (string, required), `priority` (string, required), `dueDate` (string), `sourceNoteId` (string), `createdBy` (string, required), `googleSynced` (string), `createdAt`/`updatedAt` (string, required)
 
-**rawNotes:** `id` (string, required), `content` (string, required), `processed` (boolean, required), `createdAt` (string, required)
+**rawNotes** (app-seitig "Notizen"): `id` (string, required), `content` (string, required), `processed` (boolean, required), `title` (string), `enhanced` (string), `tags` (string array), `projectId` (string), `relatedNoteIds` (string array), `source` (string), `sourceUrl` (string), `pinned` (boolean), `createdAt` (string, required), `updatedAt` (string)
 
-**suggestions:** `id` (string, required), `rawNoteId` (string, required), `suggestedTitle` (string, required), `suggestedDescription` (string), `suggestedProjectId` (string), `suggestedNewProjectTitle` (string), `confidence` (float, required), `priority` (string, required), `dueDate` (string), `reasoning` (string), `needsReview` (boolean, required), `state` (string, required), `createdAt` (string, required)
+**suggestions:** `id` (string, required), `rawNoteId` (string, required), `kind` (string), `suggestedTitle` (string, required), `suggestedDescription` (string), `suggestedProjectId` (string), `suggestedNewProjectTitle` (string), `confidence` (float, required), `priority` (string, required), `dueDate` (string), `eventStart` (string), `eventEnd` (string), `reasoning` (string), `needsReview` (boolean, required), `state` (string, required), `createdAt` (string, required)
 
 ## Environment Variables
 

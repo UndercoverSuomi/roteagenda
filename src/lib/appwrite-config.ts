@@ -12,7 +12,9 @@ export const APPWRITE_DATABASE_ID =
 export const APPWRITE_COLLECTIONS = {
   projects: process.env.NEXT_PUBLIC_APPWRITE_PROJECTS_COLLECTION_ID || "projects",
   tasks: process.env.NEXT_PUBLIC_APPWRITE_TASKS_COLLECTION_ID || "tasks",
-  rawNotes: process.env.NEXT_PUBLIC_APPWRITE_RAW_NOTES_COLLECTION_ID || "rawNotes",
+  // App-seitig heißen sie Notizen; die Collection behält aus
+  // Kompatibilitätsgründen die historische ID "rawNotes".
+  notes: process.env.NEXT_PUBLIC_APPWRITE_RAW_NOTES_COLLECTION_ID || "rawNotes",
   suggestions:
     process.env.NEXT_PUBLIC_APPWRITE_SUGGESTIONS_COLLECTION_ID || "suggestions",
 };

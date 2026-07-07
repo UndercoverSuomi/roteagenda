@@ -2,11 +2,12 @@
 
 import { ArrowLeft, ChevronRight, Search } from "lucide-react";
 import { useMemo } from "react";
+import { noteDisplayTitle } from "@/components/app-helpers";
 import { ScreenHeader } from "@/components/ui/primitives";
 import { TaskRow } from "@/components/ui/task-items";
 import { formatDateLabel } from "@/lib/date";
 import type { Locale, Translator } from "@/lib/i18n";
-import type { Project, RawNote, Task } from "@/lib/types";
+import type { Note, Project, Task } from "@/lib/types";
 
 // Obergrenze pro Gruppe, damit sehr breite Suchbegriffe die Liste nicht fluten.
 const MAX_RESULTS_PER_GROUP = 25;
@@ -15,7 +16,7 @@ export function SearchScreen({
   query,
   tasks,
   projects,
-  rawNotes,
+  notes,
   projectById,
   locale,
   t,
@@ -23,12 +24,13 @@ export function SearchScreen({
   onBack,
   onOpenTask,
   onOpenProject,
+  onOpenNote,
   onToggleTask,
 }: {
   query: string;
   tasks: Task[];
   projects: Project[];
-  rawNotes: RawNote[];
+  notes: Note[];
   projectById: Map<string, Project>;
   locale: Locale;
   t: Translator;
@@ -36,6 +38,7 @@ export function SearchScreen({
   onBack: () => void;
   onOpenTask: (taskId: string) => void;
   onOpenProject: (projectId: string) => void;
+  onOpenNote: (noteId: string) => void;
   onToggleTask: (taskId: string) => void;
 }) {
   const needle = query.trim().toLowerCase();
@@ -57,11 +60,13 @@ export function SearchScreen({
           matches(project.title, project.description, project.keywords.join(" ")),
         )
         .slice(0, MAX_RESULTS_PER_GROUP),
-      notes: rawNotes
-        .filter((note) => matches(note.content))
+      notes: notes
+        .filter((note) =>
+          matches(note.title, note.content, note.enhanced, note.tags.join(" ")),
+        )
         .slice(0, MAX_RESULTS_PER_GROUP),
     };
-  }, [needle, tasks, projects, rawNotes]);
+  }, [needle, tasks, projects, notes]);
 
   const hasResults = Boolean(
     results.tasks.length || results.projects.length || results.notes.length,
@@ -149,19 +154,25 @@ export function SearchScreen({
           <h2 className={groupHeadingClass}>{t("search.notes")}</h2>
           <div className="mt-2 space-y-3">
             {results.notes.map((note) => (
-              <div
+              <button
                 key={note.id}
-                className="rounded-[6px] border border-[var(--line)] bg-[var(--surface)] p-4"
+                type="button"
+                onClick={() => onOpenNote(note.id)}
+                className="block w-full rounded-[6px] border border-[var(--line)] bg-[var(--surface)] p-4 text-left transition hover:bg-[var(--surface-strong)]"
               >
-                <p className="line-clamp-3 text-[13px] leading-6 text-[var(--ink-soft)]">
-                  {note.content}
+                <p className="truncate text-[13px] font-bold">
+                  {noteDisplayTitle(note, t("notes.untitled"))}
+                </p>
+                <p className="mt-1 line-clamp-3 text-[13px] leading-6 text-[var(--ink-soft)]">
+                  {note.enhanced || note.content}
                 </p>
                 <p className="mt-2 text-[11px] font-semibold uppercase tracking-[0.04em] text-[var(--muted)]">
                   {t("project.noteMeta", {
                     date: formatDateLabel(note.createdAt.slice(0, 10), locale),
                   })}
+                  {note.tags.length ? ` · ${note.tags.map((tag) => `#${tag}`).join(" ")}` : ""}
                 </p>
-              </div>
+              </button>
             ))}
           </div>
         </section>

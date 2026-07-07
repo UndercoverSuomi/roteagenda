@@ -19,12 +19,15 @@ import type {
   TaskDetailTab,
   TaskFilter,
 } from "@/components/app-types";
+import { NoteEditor } from "@/components/editors/note-editor";
 import { ProjectEditor } from "@/components/editors/project-editor";
 import { TaskEditor } from "@/components/editors/task-editor";
 import { AuthScreen } from "@/components/screens/auth-screen";
 import { CaptureScreen } from "@/components/screens/capture-screen";
 import { InboxScreen } from "@/components/screens/inbox-screen";
 import { MoreScreen } from "@/components/screens/more-screen";
+import { NoteDetailScreen } from "@/components/screens/note-detail-screen";
+import { NotesScreen } from "@/components/screens/notes-screen";
 import { ProjectDetailScreen } from "@/components/screens/project-detail-screen";
 import { ProjectsScreen } from "@/components/screens/projects-screen";
 import { SearchScreen } from "@/components/screens/search-screen";
@@ -35,7 +38,7 @@ import { DesktopInsightPanel } from "@/components/ui/insight-panel";
 import { BottomNav, DesktopSidebar } from "@/components/ui/navigation";
 import { AppShellMessage, WorkSurface } from "@/components/ui/primitives";
 import { UndoToast } from "@/components/ui/undo-toast";
-import { fetchDailyBriefing, processRawNoteWithConfiguredAi } from "@/lib/ai-client";
+import { enhanceNoteWithConfiguredAi, fetchDailyBriefing } from "@/lib/ai-client";
 import { getAiModelLabel, MAX_NOTE_LENGTH, type AiModelId } from "@/lib/ai-models";
 import { createEmptyAppData } from "@/lib/app-data";
 import { buildAppUrl, parseAppUrl } from "@/lib/app-url";
@@ -50,6 +53,11 @@ import {
   type SyncOp,
 } from "@/lib/appwrite-store";
 import { toIsoDate } from "@/lib/date";
+import {
+  addEventToGoogleCalendar,
+  buildCalendarTemplateUrl,
+  isGoogleConfigured,
+} from "@/lib/google";
 import {
   detectDeviceLocale,
   storeDeviceLocale,
@@ -79,17 +87,25 @@ import type {
   AiSuggestion,
   AppData,
   GoogleSyncTarget,
+  Note,
   Project,
   Task,
 } from "@/lib/types";
 
 type UndoState = { message: string; apply: () => void };
+type EnhanceOutcome = { noteId: string; count: number };
+type EnhanceError = { noteId: string; message: string };
 
 // Startzustand aus der URL (Deep-Link) bzw. Welcome-Logik ableiten.
 // Läuft nur clientseitig; das Server-HTML zeigt ohnehin erst den Auth-Check.
-function readInitialLocation(): { screen: Screen; projectId: string; taskId: string } {
+function readInitialLocation(): {
+  screen: Screen;
+  projectId: string;
+  taskId: string;
+  noteId: string;
+} {
   if (typeof window === "undefined") {
-    return { screen: "today", projectId: "", taskId: "" };
+    return { screen: "today", projectId: "", taskId: "", noteId: "" };
   }
 
   const parsed = parseAppUrl(window.location.search);
@@ -98,6 +114,7 @@ function readInitialLocation(): { screen: Screen; projectId: string; taskId: str
       screen: hasSeenWelcome() ? "today" : "welcome",
       projectId: "",
       taskId: "",
+      noteId: "",
     };
   }
 
@@ -105,7 +122,12 @@ function readInitialLocation(): { screen: Screen; projectId: string; taskId: str
     screen: parsed.screen,
     projectId: parsed.projectId ?? "",
     taskId: parsed.taskId ?? "",
+    noteId: parsed.noteId ?? "",
   };
+}
+
+function createLocalId(prefix: string) {
+  return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
 }
 
 export function RoteAgendaApp() {
@@ -136,6 +158,7 @@ export function RoteAgendaApp() {
     () => readInitialLocation().projectId,
   );
   const [selectedTaskId, setSelectedTaskId] = useState(() => readInitialLocation().taskId);
+  const [selectedNoteId, setSelectedNoteId] = useState(() => readInitialLocation().noteId);
   const [captureText, setCaptureText] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [activeSuggestions, setActiveSuggestions] = useState<AiSuggestion[]>([]);
@@ -147,7 +170,12 @@ export function RoteAgendaApp() {
   const [isBriefingLoading, setIsBriefingLoading] = useState(false);
   const [editingTask, setEditingTask] = useState<Task | null>(null);
   const [editingProject, setEditingProject] = useState<Project | null>(null);
+  const [editingNote, setEditingNote] = useState<Note | null>(null);
   const [editingSuggestionId, setEditingSuggestionId] = useState<string | null>(null);
+  // KI-Veredelung: laufende Notizen, letztes Ergebnis und letzter Fehler.
+  const [enhancingNoteIds, setEnhancingNoteIds] = useState<Set<string>>(new Set());
+  const [enhanceOutcome, setEnhanceOutcome] = useState<EnhanceOutcome | null>(null);
+  const [enhanceError, setEnhanceError] = useState<EnhanceError | null>(null);
   const [undo, setUndo] = useState<UndoState | null>(null);
   const undoTimerRef = useRef<number | null>(null);
   const userIdRef = useRef("");
@@ -205,10 +233,12 @@ export function RoteAgendaApp() {
       const parsed = parseAppUrl(window.location.search);
       setEditingTask(null);
       setEditingProject(null);
+      setEditingNote(null);
       setEditingSuggestionId(null);
       setScreen(parsed.screen);
       setSelectedProjectId(parsed.projectId ?? "");
       setSelectedTaskId(parsed.taskId ?? "");
+      setSelectedNoteId(parsed.noteId ?? "");
     }
 
     window.addEventListener("popstate", onPopState);
@@ -404,6 +434,7 @@ export function RoteAgendaApp() {
   // Das Insight-Panel zeigt ohne Auswahl das erste Projekt als Standard.
   const insightProject = selectedProject ?? data.projects[0];
   const selectedTask = data.tasks.find((task) => task.id === selectedTaskId);
+  const selectedNote = data.notes.find((note) => note.id === selectedNoteId);
 
   const projectById = useMemo(() => {
     return new Map(data.projects.map((project) => [project.id, project]));
@@ -434,11 +465,17 @@ export function RoteAgendaApp() {
   // damit Browser-Historie und Deep-Links funktionieren.
   function goTo(
     nextScreen: Screen,
-    options?: { projectId?: string; taskId?: string; replace?: boolean },
+    options?: {
+      projectId?: string;
+      taskId?: string;
+      noteId?: string;
+      replace?: boolean;
+    },
   ) {
     setScreen(nextScreen);
     if (options?.projectId !== undefined) setSelectedProjectId(options.projectId);
     if (options?.taskId !== undefined) setSelectedTaskId(options.taskId);
+    if (options?.noteId !== undefined) setSelectedNoteId(options.noteId);
 
     // Der Welcome-Screen ist bewusst nicht URL-adressierbar.
     if (typeof window === "undefined" || nextScreen === "welcome") return;
@@ -447,6 +484,7 @@ export function RoteAgendaApp() {
       screen: nextScreen,
       projectId: options?.projectId ?? selectedProjectId ?? null,
       taskId: options?.taskId ?? selectedTaskId ?? null,
+      noteId: options?.noteId ?? selectedNoteId ?? null,
     });
     const current = window.location.pathname + window.location.search;
     if (current === url) return;
@@ -471,6 +509,10 @@ export function RoteAgendaApp() {
     }
   }
 
+  function openNote(noteId: string) {
+    goTo("note", { noteId });
+  }
+
   function showUndo(message: string, apply: () => void) {
     if (undoTimerRef.current) {
       window.clearTimeout(undoTimerRef.current);
@@ -491,20 +533,23 @@ export function RoteAgendaApp() {
     setUndo(null);
   }
 
-  async function handleProcessNote() {
-    const trimmed = captureText.trim();
-    if (!trimmed) return;
+  // ── Notizen ────────────────────────────────────────────────────────
 
-    setCaptureError(null);
-    setCaptureNotice(null);
-    setIsProcessingNote(true);
+  // Zentrale KI-Veredelung: Notiz ausformulieren, taggen, zuordnen,
+  // verlinken und Aufgaben-/Terminvorschläge einsammeln.
+  async function runNoteEnhancement(baseNote: Note): Promise<AiSuggestion[]> {
+    const latest = data.notes.find((note) => note.id === baseNote.id) ?? baseNote;
+
+    setEnhanceError(null);
+    setEnhanceOutcome(null);
+    setEnhancingNoteIds((current) => new Set(current).add(latest.id));
 
     try {
-      const result = await processRawNoteWithConfiguredAi({
-        note: trimmed,
+      const result = await enhanceNoteWithConfiguredAi({
+        noteId: latest.id,
+        content: latest.content,
         modelId: data.settings.aiModel,
         projects: data.projects,
-        // Offene Aufgaben als Kontext, damit die KI keine Duplikate vorschlägt.
         openTasks: data.tasks
           .filter((task) => task.status !== "done")
           .slice(0, 120)
@@ -513,29 +558,180 @@ export function RoteAgendaApp() {
             projectId: task.projectId,
             dueDate: task.dueDate,
           })),
+        existingTags: Array.from(new Set(data.notes.flatMap((note) => note.tags))).slice(
+          0,
+          40,
+        ),
+        otherNotes: data.notes
+          .filter((note) => note.id !== latest.id)
+          .slice(0, 60)
+          .map((note) => ({
+            id: note.id,
+            title: note.title || note.content.slice(0, 60),
+            tags: note.tags,
+          })),
         locale,
       });
+
+      const updated: Note = {
+        ...latest,
+        title: result.enhancement.title,
+        enhanced: result.enhancement.enhanced,
+        tags: result.enhancement.tags,
+        // Eine manuelle Projektzuordnung wird von der KI nicht gelöscht.
+        projectId: result.enhancement.projectId ?? latest.projectId,
+        relatedNoteIds: result.enhancement.relatedNoteIds,
+        processed: true,
+        updatedAt: new Date().toISOString(),
+      };
+
       setData((current) => ({
         ...current,
-        rawNotes: [result.rawNote, ...current.rawNotes],
+        notes: current.notes.map((note) => (note.id === updated.id ? updated : note)),
         suggestions: [...result.suggestions, ...current.suggestions],
       }));
-      setActiveSuggestions(result.suggestions);
-      setCaptureText("");
-      if (!result.suggestions.length) {
-        setCaptureNotice(t("capture.noNewTasks"));
-      }
-      persist(t("entity.rawNote"), {
-        kind: "upsert",
-        collection: "rawNotes",
-        item: result.rawNote,
-      });
+      persist(t("entity.note"), { kind: "upsert", collection: "notes", item: updated });
       for (const suggestion of result.suggestions) {
         persist(t("entity.suggestion"), {
           kind: "upsert",
           collection: "suggestions",
           item: suggestion,
         });
+      }
+      setEnhanceOutcome({ noteId: updated.id, count: result.suggestions.length });
+
+      return result.suggestions;
+    } catch (error) {
+      setEnhanceError({ noteId: latest.id, message: readErrorMessage(error, t) });
+      throw error;
+    } finally {
+      setEnhancingNoteIds((current) => {
+        const next = new Set(current);
+        next.delete(latest.id);
+        return next;
+      });
+    }
+  }
+
+  function createBlankNote() {
+    const now = new Date().toISOString();
+    setEditingNote({
+      id: createLocalId("note"),
+      title: "",
+      content: "",
+      enhanced: "",
+      tags: [],
+      projectId: null,
+      relatedNoteIds: [],
+      source: "manual",
+      sourceUrl: null,
+      pinned: false,
+      processed: false,
+      createdAt: now,
+      updatedAt: now,
+    });
+  }
+
+  function saveNote(note: Note) {
+    const exists = data.notes.some((item) => item.id === note.id);
+
+    setData((current) => ({
+      ...current,
+      notes: exists
+        ? current.notes.map((item) => (item.id === note.id ? note : item))
+        : [note, ...current.notes],
+    }));
+    setEditingNote(null);
+    persist(t("entity.note"), { kind: "upsert", collection: "notes", item: note });
+
+    // Neue Notizen landen direkt in der Detailansicht und werden
+    // automatisch von der KI veredelt.
+    if (!exists) {
+      goTo("note", { noteId: note.id });
+      void runNoteEnhancement(note).catch(() => undefined);
+    }
+  }
+
+  function restoreNotes(notes: Note[]) {
+    setData((current) => ({
+      ...current,
+      notes: [...notes, ...current.notes],
+    }));
+    for (const note of notes) {
+      persist(t("entity.note"), { kind: "upsert", collection: "notes", item: note });
+    }
+  }
+
+  function deleteNote(noteId: string) {
+    const target = data.notes.find((note) => note.id === noteId);
+
+    setData((current) => ({
+      ...current,
+      notes: current.notes.filter((note) => note.id !== noteId),
+    }));
+    setEditingNote(null);
+    if (screen === "note" && selectedNoteId === noteId) {
+      goTo("notes", { replace: true, noteId: "" });
+    }
+    persist(t("entity.noteDelete"), { kind: "delete", collection: "notes", id: noteId });
+
+    if (target) {
+      showUndo(t("undo.noteDeleted"), () => restoreNotes([target]));
+    }
+  }
+
+  function toggleNotePin(noteId: string) {
+    const target = data.notes.find((note) => note.id === noteId);
+    if (!target) return;
+
+    const updated: Note = {
+      ...target,
+      pinned: !target.pinned,
+      updatedAt: new Date().toISOString(),
+    };
+    setData((current) => ({
+      ...current,
+      notes: current.notes.map((note) => (note.id === noteId ? updated : note)),
+    }));
+    persist(t("entity.note"), { kind: "upsert", collection: "notes", item: updated });
+  }
+
+  // ── Capture (Schnellnotiz) ─────────────────────────────────────────
+
+  async function handleProcessNote() {
+    const trimmed = captureText.trim();
+    if (!trimmed) return;
+
+    setCaptureError(null);
+    setCaptureNotice(null);
+    setIsProcessingNote(true);
+
+    // Die Notiz existiert sofort — auch wenn die KI danach scheitert.
+    const now = new Date().toISOString();
+    const note: Note = {
+      id: createLocalId("note"),
+      title: "",
+      content: trimmed,
+      enhanced: "",
+      tags: [],
+      projectId: null,
+      relatedNoteIds: [],
+      source: "capture",
+      sourceUrl: null,
+      pinned: false,
+      processed: false,
+      createdAt: now,
+      updatedAt: now,
+    };
+    setData((current) => ({ ...current, notes: [note, ...current.notes] }));
+    persist(t("entity.note"), { kind: "upsert", collection: "notes", item: note });
+    setCaptureText("");
+
+    try {
+      const suggestions = await runNoteEnhancement(note);
+      setActiveSuggestions(suggestions);
+      if (!suggestions.length) {
+        setCaptureNotice(t("capture.noNewTasks"));
       }
     } catch (error) {
       setCaptureError(readErrorMessage(error, t));
@@ -550,6 +746,8 @@ export function RoteAgendaApp() {
       return joined.slice(0, MAX_NOTE_LENGTH);
     });
   }
+
+  // ── Vorschläge ─────────────────────────────────────────────────────
 
   function updateSuggestion(updated: AiSuggestion) {
     setActiveSuggestions((current) =>
@@ -566,6 +764,56 @@ export function RoteAgendaApp() {
       collection: "suggestions",
       item: updated,
     });
+  }
+
+  function markSuggestionAccepted(suggestion: AiSuggestion) {
+    const accepted = { ...suggestion, state: "accepted" as const, needsReview: false };
+    setData((current) => ({
+      ...current,
+      suggestions: current.suggestions.map((item) =>
+        item.id === suggestion.id ? accepted : item,
+      ),
+    }));
+    setActiveSuggestions((current) =>
+      current.map((item) => (item.id === suggestion.id ? accepted : item)),
+    );
+    persist(t("entity.suggestion"), {
+      kind: "upsert",
+      collection: "suggestions",
+      item: accepted,
+    });
+  }
+
+  // Terminvorschlag: an Google Kalender übergeben, keine App-Aufgabe.
+  function acceptEventSuggestion(suggestion: AiSuggestion) {
+    if (!suggestion.eventStart) return;
+
+    const event = {
+      title: suggestion.suggestedTitle,
+      description: suggestion.suggestedDescription,
+      start: suggestion.eventStart,
+      end: suggestion.eventEnd,
+    };
+
+    // Vorbefüll-Fenster synchron öffnen (Popup-Blocker); mit Client-ID
+    // läuft die Übergabe direkt über die Google-API.
+    if (!isGoogleConfigured) {
+      window.open(buildCalendarTemplateUrl(event), "_blank", "noopener");
+    } else {
+      void addEventToGoogleCalendar(event).catch(() => {
+        window.open(buildCalendarTemplateUrl(event), "_blank", "noopener");
+      });
+    }
+
+    markSuggestionAccepted(suggestion);
+  }
+
+  function handleSuggestionAccept(suggestion: AiSuggestion, createdBy: "ai" | "user" = "ai") {
+    if (suggestion.kind === "event") {
+      acceptEventSuggestion(suggestion);
+      return;
+    }
+    acceptSuggestion(suggestion, createdBy);
   }
 
   function acceptSuggestion(suggestion: AiSuggestion, createdBy: "ai" | "user" = "ai") {
@@ -593,7 +841,7 @@ export function RoteAgendaApp() {
     }
 
     const task: Task = {
-      id: `task-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
+      id: createLocalId("task"),
       title: suggestion.suggestedTitle,
       description: suggestion.suggestedDescription,
       projectId,
@@ -661,6 +909,8 @@ export function RoteAgendaApp() {
       item: rejected,
     });
   }
+
+  // ── Aufgaben ───────────────────────────────────────────────────────
 
   function updateStoredTask(updated: Task) {
     setData((current) => ({
@@ -753,6 +1003,8 @@ export function RoteAgendaApp() {
     }
   }
 
+  // ── Projekte ───────────────────────────────────────────────────────
+
   function toggleProjectAi(projectId: string) {
     const target = data.projects.find((project) => project.id === projectId);
     if (!target) return;
@@ -820,7 +1072,7 @@ export function RoteAgendaApp() {
   function createBlankProject() {
     const now = new Date().toISOString();
     setEditingProject({
-      id: `project-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
+      id: createLocalId("project"),
       title: "",
       description: "",
       keywords: [],
@@ -837,7 +1089,7 @@ export function RoteAgendaApp() {
 
     const now = new Date().toISOString();
     setEditingTask({
-      id: `task-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
+      id: createLocalId("task"),
       title: "",
       description: "",
       projectId,
@@ -851,6 +1103,8 @@ export function RoteAgendaApp() {
       updatedAt: now,
     });
   }
+
+  // ── Konto & Einstellungen ──────────────────────────────────────────
 
   async function handleAuthSubmit({
     email,
@@ -916,12 +1170,15 @@ export function RoteAgendaApp() {
     setActiveSuggestions([]);
     setSelectedProjectId("");
     setSelectedTaskId("");
+    setSelectedNoteId("");
     setSearchQuery("");
     setUndo(null);
     setUsedCachedData(false);
     setBriefing(null);
     setBriefingError(null);
     setCaptureNotice(null);
+    setEnhanceOutcome(null);
+    setEnhanceError(null);
     setScreen(hasSeenWelcome() ? "today" : "welcome");
     if (typeof window !== "undefined") {
       window.history.replaceState(null, "", "/");
@@ -937,7 +1194,9 @@ export function RoteAgendaApp() {
     setActiveSuggestions([]);
     setUndo(null);
     setBriefing(null);
-    goTo("today", { replace: true, projectId: "", taskId: "" });
+    setEnhanceOutcome(null);
+    setEnhanceError(null);
+    goTo("today", { replace: true, projectId: "", taskId: "", noteId: "" });
     persist(t("entity.deleteAll"), { kind: "deleteAll" });
   }
 
@@ -1070,7 +1329,7 @@ export function RoteAgendaApp() {
           onChangeText={setCaptureText}
           onAppendText={appendCaptureText}
           onProcess={handleProcessNote}
-          onAccept={acceptSuggestion}
+          onAccept={handleSuggestionAccept}
           onReject={rejectSuggestion}
           onEditSuggestion={setEditingSuggestionId}
           onUpdateSuggestion={updateSuggestion}
@@ -1088,9 +1347,58 @@ export function RoteAgendaApp() {
           t={t}
           onEditSuggestion={setEditingSuggestionId}
           onUpdateSuggestion={updateSuggestion}
-          onAccept={acceptSuggestion}
+          onAccept={handleSuggestionAccept}
           onReject={rejectSuggestion}
           onOpenMore={() => navigate("more")}
+        />
+      );
+    }
+
+    if (screen === "notes") {
+      return (
+        <NotesScreen
+          notes={data.notes}
+          projectById={projectById}
+          t={t}
+          onOpenNote={openNote}
+          onCreateNote={createBlankNote}
+          onTogglePin={toggleNotePin}
+        />
+      );
+    }
+
+    if (screen === "note" && selectedNote) {
+      return (
+        <NoteDetailScreen
+          note={selectedNote}
+          project={
+            selectedNote.projectId ? projectById.get(selectedNote.projectId) : undefined
+          }
+          relatedNotes={data.notes.filter(
+            (note) =>
+              note.id !== selectedNote.id &&
+              (selectedNote.relatedNoteIds.includes(note.id) ||
+                note.relatedNoteIds.includes(selectedNote.id)),
+          )}
+          linkedTasks={data.tasks.filter((task) => task.sourceNoteId === selectedNote.id)}
+          isEnhancing={enhancingNoteIds.has(selectedNote.id)}
+          enhanceError={
+            enhanceError?.noteId === selectedNote.id ? enhanceError.message : null
+          }
+          newSuggestionCount={
+            enhanceOutcome?.noteId === selectedNote.id ? enhanceOutcome.count : 0
+          }
+          locale={locale}
+          t={t}
+          onBack={() => navigate("notes")}
+          onEdit={() => setEditingNote(selectedNote)}
+          onTogglePin={() => toggleNotePin(selectedNote.id)}
+          onEnhance={() => void runNoteEnhancement(selectedNote).catch(() => undefined)}
+          onOpenNote={openNote}
+          onOpenTask={openTask}
+          onToggleTask={toggleTask}
+          onOpenProject={openProject}
+          onOpenInbox={() => navigate("inbox")}
         />
       );
     }
@@ -1121,6 +1429,7 @@ export function RoteAgendaApp() {
           onTabChange={setProjectTab}
           onOpenTask={openTask}
           onToggleTask={toggleTask}
+          onOpenNote={openNote}
           onAddTask={() => createBlankTask(selectedProject.id)}
           onToggleAi={() => toggleProjectAi(selectedProject.id)}
           onEdit={() => setEditingProject(selectedProject)}
@@ -1133,7 +1442,7 @@ export function RoteAgendaApp() {
         <TaskDetailScreen
           task={selectedTask}
           project={projectById.get(selectedTask.projectId)}
-          rawNote={data.rawNotes.find((note) => note.id === selectedTask.sourceNoteId)}
+          rawNote={data.notes.find((note) => note.id === selectedTask.sourceNoteId)}
           suggestion={data.suggestions.find(
             (suggestion) => suggestion.rawNoteId === selectedTask.sourceNoteId,
           )}
@@ -1157,7 +1466,7 @@ export function RoteAgendaApp() {
           query={searchQuery}
           tasks={data.tasks}
           projects={data.projects}
-          rawNotes={data.rawNotes}
+          notes={data.notes}
           projectById={projectById}
           locale={locale}
           t={t}
@@ -1165,6 +1474,7 @@ export function RoteAgendaApp() {
           onBack={() => navigate("today")}
           onOpenTask={openTask}
           onOpenProject={openProject}
+          onOpenNote={openNote}
           onToggleTask={toggleTask}
         />
       );
@@ -1316,6 +1626,18 @@ export function RoteAgendaApp() {
           onClose={() => setEditingProject(null)}
           onDelete={deleteProject}
           onSave={saveProject}
+        />
+      ) : null}
+
+      {editingNote ? (
+        <NoteEditor
+          note={editingNote}
+          isNew={!data.notes.some((note) => note.id === editingNote.id)}
+          projects={data.projects}
+          t={t}
+          onClose={() => setEditingNote(null)}
+          onDelete={deleteNote}
+          onSave={saveNote}
         />
       ) : null}
 

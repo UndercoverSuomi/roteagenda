@@ -1,9 +1,9 @@
 import { NextResponse } from "next/server";
-import { MAX_NOTE_LENGTH } from "@/lib/ai-models";
 import { isLocale } from "@/lib/i18n";
 import {
-  processNoteWithProvider,
+  enhanceNoteWithProvider,
   resolveAiModelConfig,
+  type NoteLinkCandidate,
   type OpenTaskContext,
 } from "@/lib/ai-server";
 import {
@@ -15,19 +15,26 @@ import type { Project } from "@/lib/types";
 
 export const runtime = "nodejs";
 
-type ProcessNoteRequestBody = {
-  note?: unknown;
+type EnhanceNoteRequestBody = {
+  noteId?: unknown;
+  content?: unknown;
   modelId?: unknown;
   projects?: unknown;
   openTasks?: unknown;
+  existingTags?: unknown;
+  otherNotes?: unknown;
   today?: unknown;
   locale?: unknown;
 };
 
 const enforceRateLimit = createRateLimiter(10 * 60_000, 20);
 
-// Serverseitige Obergrenze, damit der Prompt nicht beliebig wächst.
+// Notizen dürfen länger sein als Capture-Eingaben; Obergrenze entspricht
+// dem content-Attribut in Appwrite.
+const MAX_CONTENT_LENGTH = 8000;
 const MAX_OPEN_TASKS = 150;
+const MAX_OTHER_NOTES = 80;
+const MAX_EXISTING_TAGS = 60;
 
 type RequestProject = Pick<
   Project,
@@ -40,10 +47,13 @@ export async function POST(request: Request) {
     enforceRateLimit(user.$id);
 
     const body = await readJsonBody(request);
-    const note = readNote(body.note);
+    const noteId = readNoteId(body.noteId);
+    const content = readContent(body.content);
     const modelId = readModelId(body.modelId);
     const projects = readProjects(body.projects);
     const openTasks = readOpenTasks(body.openTasks);
+    const existingTags = readExistingTags(body.existingTags);
+    const otherNotes = readOtherNotes(body.otherNotes);
     const today = readToday(body.today);
     const locale = readLocale(body.locale);
     const resolved = resolveAiModelConfig(modelId);
@@ -52,11 +62,14 @@ export async function POST(request: Request) {
       return jsonError(resolved.error, resolved.status);
     }
 
-    const result = await processNoteWithProvider({
+    const result = await enhanceNoteWithProvider({
       config: resolved.config,
-      note,
+      noteId,
+      content,
       projects,
       openTasks,
+      existingTags,
+      otherNotes,
       today,
       locale,
     });
@@ -78,7 +91,7 @@ export async function POST(request: Request) {
   }
 }
 
-async function readJsonBody(request: Request): Promise<ProcessNoteRequestBody> {
+async function readJsonBody(request: Request): Promise<EnhanceNoteRequestBody> {
   try {
     const body = (await request.json()) as unknown;
     if (!isRecord(body)) {
@@ -91,20 +104,28 @@ async function readJsonBody(request: Request): Promise<ProcessNoteRequestBody> {
   }
 }
 
-function readNote(value: unknown) {
+function readNoteId(value: unknown) {
   if (typeof value !== "string" || !value.trim()) {
-    throw new RouteError("Bitte gib eine Rohnotiz ein, bevor du die KI startest.", 400);
+    throw new RouteError("Die Notiz-ID fehlt in der KI-Anfrage.", 400);
   }
 
-  const note = value.trim();
-  if (note.length > MAX_NOTE_LENGTH) {
+  return value.trim();
+}
+
+function readContent(value: unknown) {
+  if (typeof value !== "string" || !value.trim()) {
+    throw new RouteError("Bitte gib eine Notiz ein, bevor du die KI startest.", 400);
+  }
+
+  const content = value.trim();
+  if (content.length > MAX_CONTENT_LENGTH) {
     throw new RouteError(
-      `Die Notiz ist zu lang (${note.length} Zeichen). Erlaubt sind maximal ${MAX_NOTE_LENGTH} Zeichen.`,
+      `Die Notiz ist zu lang (${content.length} Zeichen). Erlaubt sind maximal ${MAX_CONTENT_LENGTH} Zeichen.`,
       400,
     );
   }
 
-  return note;
+  return content;
 }
 
 function readToday(value: unknown) {
@@ -137,15 +158,13 @@ function readProjects(value: unknown): RequestProject[] {
       throw new RouteError("Die Projektliste enthält einen ungültigen Eintrag.", 400);
     }
 
-    const project = {
+    return {
       id: readString(item.id, "Projekt-ID"),
       title: readString(item.title, "Projekttitel"),
       description: readString(item.description, "Projektbeschreibung"),
       keywords: readStringArray(item.keywords, "Projekt-Keywords"),
       aiEnabled: typeof item.aiEnabled === "boolean" ? item.aiEnabled : true,
     };
-
-    return project;
   });
 }
 
@@ -169,6 +188,37 @@ function readOpenTasks(value: unknown): OpenTaskContext[] {
           typeof item.dueDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(item.dueDate)
             ? item.dueDate
             : null,
+      },
+    ];
+  });
+}
+
+function readExistingTags(value: unknown): string[] {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value)) return [];
+
+  return value
+    .filter((tag): tag is string => typeof tag === "string" && Boolean(tag.trim()))
+    .slice(0, MAX_EXISTING_TAGS);
+}
+
+// Kandidaten für die Verlinkung mit anderen Notizen.
+function readOtherNotes(value: unknown): NoteLinkCandidate[] {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value)) return [];
+
+  return value.slice(0, MAX_OTHER_NOTES).flatMap((item) => {
+    if (!isRecord(item) || typeof item.id !== "string" || !item.id.trim()) {
+      return [];
+    }
+
+    return [
+      {
+        id: item.id,
+        title: typeof item.title === "string" ? item.title : "",
+        tags: Array.isArray(item.tags)
+          ? item.tags.filter((tag): tag is string => typeof tag === "string")
+          : [],
       },
     ];
   });

@@ -1,6 +1,6 @@
 import { getAiModelLabel, isAiModelId, type AiModelId } from "./ai-models.ts";
 import type { Locale } from "./i18n.ts";
-import type { AiSuggestion, Project, RawNote, TaskPriority } from "./types.ts";
+import type { AiSuggestion, Project, SuggestionKind, TaskPriority } from "./types.ts";
 
 type AiProviderKind = "openai-responses" | "chat-completions";
 type Env = Record<string, string | undefined>;
@@ -29,8 +29,18 @@ export type ResolvedAiModelConfig = {
   baseUrl?: string;
 };
 
-export type AiProcessingResult = {
-  rawNote: RawNote;
+// Ergebnis der Notiz-Veredelung: Anreicherung der Notiz selbst plus
+// erkannte Aufgaben-/Terminvorschläge.
+export type NoteEnhancement = {
+  title: string;
+  enhanced: string;
+  tags: string[];
+  projectId: string | null;
+  relatedNoteIds: string[];
+};
+
+export type NoteEnhancementResult = {
+  enhancement: NoteEnhancement;
   suggestions: AiSuggestion[];
 };
 
@@ -42,21 +52,33 @@ export type OpenTaskContext = {
   dueDate: string | null;
 };
 
-type BuildProcessingResultParams = {
-  note: string;
-  providerText: string;
-  nowIso?: string;
-  idFactory?: (prefix: string) => string;
+// Kandidaten für die Notiz-Verlinkung.
+export type NoteLinkCandidate = {
+  id: string;
+  title: string;
+  tags: string[];
 };
 
-type CallAiProviderParams = {
+type EnhanceNoteParams = {
   config: ResolvedAiModelConfig;
-  note: string;
+  noteId: string;
+  content: string;
   projects: Pick<Project, "id" | "title" | "description" | "keywords" | "aiEnabled">[];
   openTasks?: OpenTaskContext[];
+  existingTags?: string[];
+  otherNotes?: NoteLinkCandidate[];
   today?: string;
   locale?: Locale;
   fetchFn?: typeof fetch;
+};
+
+type BuildEnhancementParams = {
+  providerText: string;
+  noteId: string;
+  projectIds: string[];
+  otherNoteIds: string[];
+  nowIso?: string;
+  idFactory?: (prefix: string) => string;
 };
 
 type ResolveResult =
@@ -300,25 +322,35 @@ async function requestProvider(
   });
 }
 
-export async function callAiProvider({
+export async function callEnhanceProvider({
   config,
-  note,
+  content,
   projects,
   openTasks = [],
+  existingTags = [],
+  otherNotes = [],
   today,
   locale = "de",
   fetchFn = fetch,
-}: CallAiProviderParams): Promise<string> {
-  const prompt = buildPrompt(note, projects, openTasks, today, locale);
+}: EnhanceNoteParams): Promise<string> {
+  const prompt = buildEnhancePrompt(
+    content,
+    projects,
+    openTasks,
+    existingTags,
+    otherNotes,
+    today,
+    locale,
+  );
   const system =
     locale === "en"
-      ? "You extract tasks from raw notes and respond exclusively with JSON."
-      : "Du extrahierst Aufgaben aus Rohnotizen und antwortest ausschließlich mit JSON.";
+      ? "You refine raw notes into structured notes, tags, links, tasks and events. You respond exclusively with JSON."
+      : "Du veredelst Rohnotizen zu strukturierten Notizen, Tags, Verknüpfungen, Aufgaben und Terminen. Du antwortest ausschließlich mit JSON.";
 
   const response = await requestProvider(
     config,
     { system, user: prompt },
-    { maxTokens: 1800, json: true },
+    { maxTokens: 2400, json: true },
     fetchFn,
   );
 
@@ -326,18 +358,27 @@ export async function callAiProvider({
   return extractProviderText(payload);
 }
 
-// Kompletter Verarbeitungslauf mit einem Wiederholungsversuch, falls die
+// Kompletter Veredelungslauf mit einem Wiederholungsversuch, falls die
 // Antwort kein brauchbares JSON war. Provider-/HTTP-Fehler werden nicht
 // wiederholt, sondern direkt gemeldet.
-export async function processNoteWithProvider(
-  params: CallAiProviderParams,
-): Promise<AiProcessingResult> {
+export async function enhanceNoteWithProvider(
+  params: EnhanceNoteParams,
+): Promise<NoteEnhancementResult> {
+  const projectIds = params.projects
+    .filter((project) => project.aiEnabled)
+    .map((project) => project.id);
+  const otherNoteIds = (params.otherNotes ?? []).map((note) => note.id);
   let lastError: unknown;
 
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const providerText = await callAiProvider(params);
-      return buildProcessingResultFromProviderText({ note: params.note, providerText });
+      const providerText = await callEnhanceProvider(params);
+      return buildNoteEnhancementFromProviderText({
+        providerText,
+        noteId: params.noteId,
+        projectIds,
+        otherNoteIds,
+      });
     } catch (error) {
       lastError = error;
       const retryable =
@@ -349,27 +390,78 @@ export async function processNoteWithProvider(
   throw lastError;
 }
 
-export function buildProcessingResultFromProviderText({
-  note,
+const MAX_TAGS = 6;
+const MAX_RELATED_NOTES = 5;
+
+export function buildNoteEnhancementFromProviderText({
   providerText,
+  noteId,
+  projectIds,
+  otherNoteIds,
   nowIso = new Date().toISOString(),
   idFactory = createId,
-}: BuildProcessingResultParams): AiProcessingResult {
+}: BuildEnhancementParams): NoteEnhancementResult {
   const payload = parseProviderJson(providerText);
-  const suggestionsPayload = readSuggestionsPayload(payload);
-  const rawNoteId = idFactory("note");
+  if (!isRecord(payload)) {
+    throw new Error("KI-Antwort enthält kein gültiges Objekt.");
+  }
 
-  return {
-    rawNote: {
-      id: rawNoteId,
-      content: note.trim(),
-      processed: true,
-      createdAt: nowIso,
-    },
-    suggestions: suggestionsPayload.map((suggestion, index) =>
-      normalizeSuggestion(suggestion, rawNoteId, nowIso, idFactory(`suggestion-${index}`)),
-    ),
+  const knownProjects = new Set(projectIds);
+  const knownNotes = new Set(otherNoteIds);
+  const suggestionsPayload = readSuggestionsPayload(payload);
+
+  const enhancement: NoteEnhancement = {
+    title: readRequiredString(payload.title, "title").slice(0, 120),
+    enhanced: readRequiredString(payload.enhanced, "enhanced"),
+    tags: readTags(payload.tags),
+    projectId: readKnownId(payload.projectId, knownProjects),
+    relatedNoteIds: readRelatedNoteIds(payload.relatedNoteIds, knownNotes, noteId),
   };
+
+  const suggestions = suggestionsPayload.map((suggestion, index) => {
+    const normalized = normalizeSuggestion(
+      suggestion,
+      noteId,
+      nowIso,
+      idFactory(`suggestion-${index}`),
+    );
+
+    // Halluzinierte Projekt-IDs werden zu "neues Projekt"-Vorschlägen.
+    if (normalized.suggestedProjectId && !knownProjects.has(normalized.suggestedProjectId)) {
+      return { ...normalized, suggestedProjectId: null };
+    }
+    return normalized;
+  });
+
+  return { enhancement, suggestions };
+}
+
+function readTags(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    throw new Error('KI-Antwort enthält kein gültiges Feld "tags".');
+  }
+
+  const tags = value
+    .filter((tag): tag is string => typeof tag === "string")
+    .map((tag) => tag.trim().toLowerCase().replace(/^#/, ""))
+    .filter(Boolean);
+
+  return Array.from(new Set(tags)).slice(0, MAX_TAGS);
+}
+
+function readKnownId(value: unknown, known: Set<string>): string | null {
+  if (typeof value !== "string") return null;
+  return known.has(value) ? value : null;
+}
+
+function readRelatedNoteIds(value: unknown, known: Set<string>, selfId: string): string[] {
+  if (!Array.isArray(value)) return [];
+
+  const ids = value
+    .filter((id): id is string => typeof id === "string")
+    .filter((id) => id !== selfId && known.has(id));
+
+  return Array.from(new Set(ids)).slice(0, MAX_RELATED_NOTES);
 }
 
 function readSuggestionsPayload(payload: unknown): Record<string, unknown>[] {
@@ -396,10 +488,26 @@ function normalizeSuggestion(
 ): AiSuggestion {
   const priority = readPriority(value.priority);
   const confidence = readConfidence(value.confidence);
+  const kind: SuggestionKind = value.kind === "event" ? "event" : "task";
+
+  let dueDate = readNullableDate(value.dueDate);
+  let eventStart: string | null = null;
+  let eventEnd: string | null = null;
+
+  if (kind === "event") {
+    eventStart = readEventTime(value.eventStart, "eventStart");
+    eventEnd =
+      value.eventEnd === null || value.eventEnd === undefined
+        ? null
+        : readEventTime(value.eventEnd, "eventEnd");
+    // Termine tragen ihr Datum immer auch als dueDate.
+    dueDate = dueDate ?? eventStart.slice(0, 10);
+  }
 
   return {
     id,
     rawNoteId,
+    kind,
     suggestedTitle: readRequiredString(value.suggestedTitle, "suggestedTitle"),
     suggestedDescription: readRequiredString(
       value.suggestedDescription,
@@ -412,12 +520,22 @@ function normalizeSuggestion(
     ),
     confidence,
     priority,
-    dueDate: readNullableDate(value.dueDate),
+    dueDate,
+    eventStart,
+    eventEnd,
     reasoning: readRequiredString(value.reasoning, "reasoning"),
     needsReview: readBoolean(value.needsReview, "needsReview"),
     state: "pending",
     createdAt,
   };
+}
+
+function readEventTime(value: unknown, field: string) {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(value)) {
+    throw new Error(`KI-Antwort enthält kein gültiges Feld "${field}".`);
+  }
+
+  return value;
 }
 
 function readRequiredString(value: unknown, field: string) {
@@ -488,11 +606,13 @@ function describeToday(todayIso: string | undefined, locale: Locale) {
 }
 
 const JSON_SHAPE =
-  '{"suggestions":[{"suggestedTitle":"...","suggestedDescription":"...","suggestedProjectId":"project-id | null","suggestedNewProjectTitle":"... | null","confidence":0.0,"priority":"low|medium|high","dueDate":"YYYY-MM-DD | null","reasoning":"...","needsReview":true}]}';
+  '{"title":"...","enhanced":"...","tags":["tag1","tag2"],"projectId":"project-id | null","relatedNoteIds":["note-id"],"suggestions":[{"kind":"task | event","suggestedTitle":"...","suggestedDescription":"...","suggestedProjectId":"project-id | null","suggestedNewProjectTitle":"... | null","confidence":0.0,"priority":"low|medium|high","dueDate":"YYYY-MM-DD | null","eventStart":"YYYY-MM-DDTHH:MM | null","eventEnd":"YYYY-MM-DDTHH:MM | null","reasoning":"...","needsReview":true}]}';
 
 // Obergrenzen, damit der Prompt bei großen Datenmengen kompakt bleibt.
 const MAX_PROMPT_TASKS = 120;
 const MAX_PROMPT_TASK_TITLE = 120;
+const MAX_PROMPT_NOTES = 60;
+const MAX_PROMPT_TAGS = 40;
 
 function compactOpenTasks(openTasks: OpenTaskContext[]) {
   return openTasks.slice(0, MAX_PROMPT_TASKS).map((task) => ({
@@ -502,10 +622,20 @@ function compactOpenTasks(openTasks: OpenTaskContext[]) {
   }));
 }
 
-function buildPrompt(
-  note: string,
+function compactNoteCandidates(notes: NoteLinkCandidate[]) {
+  return notes.slice(0, MAX_PROMPT_NOTES).map((note) => ({
+    id: note.id,
+    title: note.title.slice(0, MAX_PROMPT_TASK_TITLE),
+    tags: note.tags.slice(0, MAX_TAGS),
+  }));
+}
+
+function buildEnhancePrompt(
+  content: string,
   projects: Pick<Project, "id" | "title" | "description" | "keywords" | "aiEnabled">[],
   openTasks: OpenTaskContext[],
+  existingTags: string[],
+  otherNotes: NoteLinkCandidate[],
   today: string | undefined,
   locale: Locale,
 ) {
@@ -518,57 +648,71 @@ function buildPrompt(
       keywords: project.keywords,
     }));
   const existingTasks = compactOpenTasks(openTasks);
+  const noteCandidates = compactNoteCandidates(otherNotes);
+  const tags = existingTags.slice(0, MAX_PROMPT_TAGS);
 
   if (locale === "en") {
     return [
-      "You are the structuring AI of Rote Agenda.",
+      "You are the structuring AI of the note app Rote Agenda.",
       `Today is ${describeToday(today, "en")}.`,
-      "Turn the raw note into 1 to 4 concrete task suggestions.",
-      "Respond exclusively with valid JSON in this shape:",
+      "You receive one raw note. Respond exclusively with valid JSON in this shape:",
       JSON_SHAPE,
-      "Use suggestedProjectId only if one of the enabled projects clearly fits.",
-      "If no project fits, set suggestedProjectId to null and suggestedNewProjectTitle to a short project name.",
-      "Convert relative expressions like today, tomorrow, Friday or next week into a concrete dueDate based on today's date.",
-      "Set dueDate to null if no deadline is recognizable.",
-      "Write suggestedTitle, suggestedDescription and reasoning in English.",
+      "About the note itself:",
+      "- title: a concise heading (max 60 characters).",
+      "- enhanced: the note rewritten cleanly and well structured. Preserve the content, invent nothing. Plain text with paragraphs and simple dashes, no markdown syntax.",
+      "- tags: 1 to 5 short lowercase keywords; prefer existing tags when they fit.",
+      "- projectId: the id of the best-fitting enabled project, otherwise null.",
+      "- relatedNoteIds: ids of thematically related notes from the candidate list (max 5), otherwise an empty list.",
+      "About suggestions (0 to 4 entries):",
+      '- kind "task": a concrete actionable task from the note. kind "event": an appointment with a recognizable date; set eventStart as local time YYYY-MM-DDTHH:MM (assume 09:00 if no time is given) and dueDate to the same date.',
+      "- For an event, also propose sensible preparation tasks as separate task suggestions (e.g. bring documents).",
+      "- Convert relative expressions like today, tomorrow or Friday based on today's date.",
+      "- Do not suggest tasks that already exist in the list of open tasks.",
+      "- If the note contains neither a task nor an event, return an empty suggestions list.",
+      "Write every text in English.",
+      ...(tags.length ? ["Existing tags:", JSON.stringify(tags)] : []),
+      ...(noteCandidates.length
+        ? ["Existing notes (id, title, tags):", JSON.stringify(noteCandidates)]
+        : []),
       ...(existingTasks.length
-        ? [
-            "Existing open tasks (JSON):",
-            JSON.stringify(existingTasks),
-            "Do not suggest anything that already exists in this list.",
-            "If the note only describes tasks that already exist, return an empty suggestions list.",
-          ]
+        ? ["Open tasks (JSON):", JSON.stringify(existingTasks)]
         : []),
       "Enabled projects:",
       JSON.stringify(enabledProjects),
       "Raw note:",
-      note,
+      content,
     ].join("\n");
   }
 
   return [
-    "Du bist die strukturierende KI von Rote Agenda.",
+    "Du bist die strukturierende KI der Notiz-App Rote Agenda.",
     `Heute ist ${describeToday(today, "de")}.`,
-    "Wandle die Rohnotiz in 1 bis 4 konkrete Aufgabenvorschläge um.",
-    "Antworte ausschließlich mit gültigem JSON in dieser Form:",
+    "Du bekommst eine Rohnotiz. Antworte ausschließlich mit gültigem JSON in dieser Form:",
     JSON_SHAPE,
-    "Nutze suggestedProjectId nur, wenn eines der aktivierten Projekte klar passt.",
-    "Wenn kein Projekt passt, setze suggestedProjectId auf null und suggestedNewProjectTitle auf einen kurzen Projektnamen.",
-    "Rechne relative Angaben wie heute, morgen, Freitag oder nächste Woche vom heutigen Datum aus in ein konkretes dueDate um.",
-    "Setze dueDate auf null, wenn keine Deadline erkennbar ist.",
-    "Formuliere suggestedTitle, suggestedDescription und reasoning auf Deutsch.",
+    "Zur Notiz selbst:",
+    "- title: eine prägnante Überschrift (maximal 60 Zeichen).",
+    "- enhanced: die Notiz sauber ausformuliert und gut strukturiert. Inhalt bewahren, nichts dazuerfinden. Reiner Text mit Absätzen und einfachen Spiegelstrichen, keine Markdown-Syntax.",
+    "- tags: 1 bis 5 kurze, kleingeschriebene Schlagwörter; nutze vorhandene Tags, wenn sie passen.",
+    "- projectId: die ID des am besten passenden aktivierten Projekts, sonst null.",
+    "- relatedNoteIds: IDs thematisch verwandter Notizen aus der Kandidatenliste (maximal 5), sonst leere Liste.",
+    "Zu den Vorschlägen (suggestions, 0 bis 4 Einträge):",
+    '- kind "task": eine konkrete Aufgabe aus der Notiz. kind "event": ein Termin mit erkennbarem Datum; setze eventStart als lokale Zeit YYYY-MM-DDTHH:MM (ohne erkennbare Uhrzeit 09:00 annehmen) und dueDate auf dasselbe Datum.',
+    "- Zu einem Termin gehören sinnvolle Vorbereitungs-Aufgaben als eigene task-Vorschläge (z. B. Unterlagen mitnehmen).",
+    "- Rechne relative Angaben wie heute, morgen oder Freitag vom heutigen Datum aus um.",
+    "- Schlage keine Aufgabe vor, die bereits in der Liste offener Aufgaben existiert.",
+    "- Enthält die Notiz weder Aufgabe noch Termin, gib eine leere suggestions-Liste zurück.",
+    "Formuliere alle Texte auf Deutsch.",
+    ...(tags.length ? ["Vorhandene Tags:", JSON.stringify(tags)] : []),
+    ...(noteCandidates.length
+      ? ["Vorhandene Notizen (id, title, tags):", JSON.stringify(noteCandidates)]
+      : []),
     ...(existingTasks.length
-      ? [
-          "Bereits vorhandene offene Aufgaben (JSON):",
-          JSON.stringify(existingTasks),
-          "Schlage nichts vor, was inhaltlich bereits in dieser Liste existiert.",
-          "Beschreibt die Notiz nur bereits vorhandene Aufgaben, gib eine leere suggestions-Liste zurück.",
-        ]
+      ? ["Offene Aufgaben (JSON):", JSON.stringify(existingTasks)]
       : []),
     "Aktivierte Projekte:",
     JSON.stringify(enabledProjects),
     "Rohnotiz:",
-    note,
+    content,
   ].join("\n");
 }
 

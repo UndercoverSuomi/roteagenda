@@ -1,21 +1,22 @@
 # Rote Agenda
 
-Rote Agenda ist ein webbasiertes, mobile-first Tool fuer Capture-first Aufgaben- und Projektorganisation. Rohnotizen werden serverseitig mit einem zentral konfigurierten KI-Anbieter in strukturierte Aufgaben, Projektzuordnungen, Deadlines, Prioritaeten und pruefbare Vorschlaege uebersetzt.
+Rote Agenda ist eine webbasierte, mobile-first Notiz- und Aufgaben-App. Notizen sind die Kern-Entitaet (wie bei Google Keep): schnell festhalten, und eine zentral konfigurierte KI formuliert sie aus, vergibt Tags, ordnet sie Projekten zu, verlinkt thematisch passende Notizen und erkennt Aufgaben und Termine — als pruefbare Vorschlaege, nie ungefragt.
 
-Die Oberflaeche ist zuerst als responsives Webtool gedacht: schnell am Handy erfassen, bequem am Desktop pruefen und organisieren. Die App ist als PWA installierbar; die mobile Informationsarchitektur bleibt bewusst App-tauglich, damit spaeter eine Android-Version darauf aufbauen kann.
+Die Oberflaeche ist zuerst als responsives Webtool gedacht: schnell am Handy erfassen, bequem am Desktop pruefen und organisieren. Die App ist als PWA installierbar und offline nutzbar; die mobile Informationsarchitektur bleibt bewusst App-tauglich, damit spaeter eine Android-Version darauf aufbauen kann.
 
 ## Kernflow
 
 - Registrieren oder anmelden (inkl. Passwort-zuruecksetzen per E-Mail)
-- Notiz schnell erfassen — getippt, per Mikrofon eingesprochen (Transkription ueber ein audiofaehiges OpenRouter-Modell, Standard `google/gemini-2.5-flash`, Override via `OPENROUTER_TRANSCRIBE_MODEL`) oder als Foto eines Notizzettels (OCR ueber ein bildfaehiges Modell, Override via `OPENROUTER_VISION_MODEL`)
-- KI verarbeitet und klassifiziert die Rohnotiz (mit aktuellem Datum als Referenz, auf Deutsch oder Englisch); sie kennt dabei Projekte und offene Aufgaben und schlaegt keine Duplikate vor
+- Notiz anlegen — im Notizen-Grid, per Schnellnotiz, per Mikrofon eingesprochen (Transkription ueber ein audiofaehiges OpenRouter-Modell, Standard `google/gemini-2.5-flash`, Override via `OPENROUTER_TRANSCRIBE_MODEL`) oder als Foto eines Notizzettels (OCR ueber ein bildfaehiges Modell, Override via `OPENROUTER_VISION_MODEL`)
+- Die KI veredelt jede neue Notiz automatisch: Titel und ausformulierte Fassung, 1-5 Tags, Projektzuordnung, Verlinkung mit verwandten Notizen (auch manuell erneut ausloesbar)
+- Klingt etwas nach einem Termin ("Arzttermin Praxis41 morgen um 9"), schlaegt die KI einen Kalendereintrag mit Uhrzeit vor — Uebernahme geht an den Google Kalender — plus sinnvolle Vorbereitungs-Aufgaben als eigene Vorschlaege
+- Aufgabenvorschlaege pruefen, bearbeiten, uebernehmen oder ignorieren; die KI kennt Projekte und offene Aufgaben und schlaegt keine Duplikate vor
+- Notizen pinnen, taggen, durchsuchen und ueber verlinkte Notizen navigieren
 - Tagesbriefing auf dem Heute-Screen: die KI fasst Ueberfaelliges und heute Faelliges kurz zusammen
-- Vorschlag pruefen, bearbeiten, uebernehmen oder ignorieren
-- Aufgabe erscheint im passenden Projekt und auf dem Heute-Dashboard
 - Aufgaben abhaken, bearbeiten, per Schnellauswahl verschieben (heute/morgen/naechste Woche), Projekte anlegen und verwalten
-- Suche ueber Aufgaben, Projekte und Rohnotizen
-- Geloeschte Aufgaben und Projekte lassen sich direkt per Toast rueckgaengig machen
-- Jede Ansicht hat eine eigene URL: Browser-Zurueck funktioniert, Aufgaben und Projekte sind verlinkbar
+- Suche ueber Aufgaben, Projekte und Notizen (inkl. Tags und KI-Fassung)
+- Geloeschte Notizen, Aufgaben und Projekte lassen sich direkt per Toast rueckgaengig machen
+- Jede Ansicht hat eine eigene URL: Browser-Zurueck funktioniert; Notizen, Aufgaben und Projekte sind verlinkbar
 
 ## Offline & Sync
 
@@ -66,7 +67,7 @@ APPWRITE_API_KEY=<api-key> node scripts/setup-appwrite.mjs
 
 Das Script legt idempotent die Datenbank `roteagenda` mit den vier Collections `projects`, `tasks`, `rawNotes` und `suggestions` samt Attributen an und schreibt die IDs in `.env.local`. Da der Code dieselben IDs als Defaults nutzt, sind abweichende Environment Variables nur noch bei eigenen IDs noetig.
 
-Nach einem Update mit Schema-Aenderungen das Script einfach erneut ausfuehren — es ergaenzt nur fehlende Attribute (z. B. `tasks.googleSynced` fuer den gespeicherten Google-Uebertragungsstatus).
+Nach einem Update mit Schema-Aenderungen das Script einfach erneut ausfuehren — es ergaenzt nur fehlende Attribute. Wichtig: Die Notiz-Features (Titel, Tags, Verlinkung, Pinnen) und Terminvorschlaege brauchen die neuen Attribute in `rawNotes` und `suggestions`; ohne erneuten Script-Lauf schlagen Notiz-Speicherungen mit einem Sync-Fehler fehl.
 
 Zusaetzlich in der Appwrite Console:
 

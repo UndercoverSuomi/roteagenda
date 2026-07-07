@@ -14,8 +14,8 @@ import { isLocale, type Locale } from "@/lib/i18n";
 import type {
   AiSuggestion,
   AppData,
+  Note,
   Project,
-  RawNote,
   Task,
   User,
   UserSettings,
@@ -58,11 +58,11 @@ export async function loadAppDataForUser(
   fallbackLocale: Locale = "de",
 ): Promise<AppData> {
   try {
-    const [settings, projects, tasks, rawNotes, suggestions] = await Promise.all([
+    const [settings, projects, tasks, notes, suggestions] = await Promise.all([
       readSettings(fallbackLocale),
       listAllDocuments<Project>("projects"),
       listAllDocuments<Task>("tasks"),
-      listAllDocuments<RawNote>("rawNotes"),
+      listAllDocuments<Note>("notes"),
       listAllDocuments<AiSuggestion>("suggestions"),
     ]);
 
@@ -71,7 +71,7 @@ export async function loadAppDataForUser(
       settings,
       projects,
       tasks,
-      rawNotes,
+      notes,
       suggestions,
     };
   } catch (error) {
@@ -111,7 +111,7 @@ export async function deleteItem(key: CollectionKey, id: string) {
 }
 
 export async function deleteAllUserData() {
-  const keys: CollectionKey[] = ["tasks", "suggestions", "rawNotes", "projects"];
+  const keys: CollectionKey[] = ["tasks", "suggestions", "notes", "projects"];
 
   for (const key of keys) {
     const items = await listAllDocuments<StoredItem>(key);

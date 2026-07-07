@@ -1,15 +1,23 @@
 import { account } from "@/lib/appwrite";
 import type { AiModelId } from "@/lib/ai-models";
-import type { AiProcessingResult, BriefingTask, OpenTaskContext } from "@/lib/ai-server";
+import type {
+  BriefingTask,
+  NoteEnhancementResult,
+  NoteLinkCandidate,
+  OpenTaskContext,
+} from "@/lib/ai-server";
 import { toIsoDate } from "@/lib/date";
 import type { Locale } from "@/lib/i18n";
 import type { Project } from "@/lib/types";
 
-type ProcessNoteRequest = {
-  note: string;
+type EnhanceNoteRequest = {
+  noteId: string;
+  content: string;
   modelId: AiModelId;
   projects: Project[];
   openTasks: OpenTaskContext[];
+  existingTags: string[];
+  otherNotes: NoteLinkCandidate[];
   locale: Locale;
 };
 
@@ -46,20 +54,26 @@ async function authorizedJsonPost<T>(
   return payload;
 }
 
-export async function processRawNoteWithConfiguredAi({
-  note,
+export async function enhanceNoteWithConfiguredAi({
+  noteId,
+  content,
   modelId,
   projects,
   openTasks,
+  existingTags,
+  otherNotes,
   locale,
-}: ProcessNoteRequest): Promise<AiProcessingResult> {
-  const payload = await authorizedJsonPost<AiProcessingResult>(
-    "/api/ai/process-note",
+}: EnhanceNoteRequest): Promise<NoteEnhancementResult> {
+  const payload = await authorizedJsonPost<NoteEnhancementResult>(
+    "/api/ai/enhance-note",
     {
-      note,
+      noteId,
+      content,
       modelId,
       projects,
       openTasks,
+      existingTags,
+      otherNotes,
       today: toIsoDate(new Date()),
       locale,
     },
@@ -67,12 +81,12 @@ export async function processRawNoteWithConfiguredAi({
       `Die KI-Anfrage ist fehlgeschlagen (${status}). Bitte prüfe die Konfiguration.`,
   );
 
-  if (!payload.rawNote || !Array.isArray(payload.suggestions)) {
+  if (!payload.enhancement || !Array.isArray(payload.suggestions)) {
     throw new Error("Die KI-Antwort hatte nicht das erwartete Format.");
   }
 
   return {
-    rawNote: payload.rawNote,
+    enhancement: payload.enhancement,
     suggestions: payload.suggestions,
   };
 }

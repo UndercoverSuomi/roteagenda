@@ -1,5 +1,5 @@
 import type { MessageKey, Translator } from "@/lib/i18n";
-import type { AiSuggestion, AppData, Project, RawNote, Task } from "@/lib/types";
+import type { AiSuggestion, AppData, Note, Project, Task } from "@/lib/types";
 import type { AiStats } from "@/components/app-types";
 
 export function cx(...classes: Array<string | false | null | undefined>) {
@@ -25,7 +25,8 @@ export function markWelcomeSeen() {
   }
 }
 
-export function collectProjectNotes(data: AppData, projectId: string): RawNote[] {
+export function collectProjectNotes(data: AppData, projectId: string): Note[] {
+  // Direkt zugeordnete Notizen plus Notizen, aus denen Projektaufgaben entstanden.
   const noteIds = new Set(
     data.tasks
       .filter((task) => task.projectId === projectId && task.sourceNoteId)
@@ -38,22 +39,32 @@ export function collectProjectNotes(data: AppData, projectId: string): RawNote[]
     }
   }
 
-  return data.rawNotes.filter((note) => noteIds.has(note.id));
+  return data.notes.filter(
+    (note) => note.projectId === projectId || noteIds.has(note.id),
+  );
 }
 
 export function buildAiStats(data: AppData): AiStats {
   return {
-    processedNotes: data.rawNotes.filter((note) => note.processed).length,
+    processedNotes: data.notes.filter((note) => note.processed).length,
     acceptedCount: data.suggestions.filter((item) => item.state === "accepted").length,
     pendingCount: data.suggestions.filter((item) => item.state === "pending").length,
   };
 }
 
 export function suggestionStatusKey(suggestion: AiSuggestion): MessageKey {
+  if (suggestion.kind === "event") return "sugg.status.event";
   if (suggestion.suggestedNewProjectTitle) return "sugg.status.newProject";
   if (suggestion.needsReview) return "sugg.status.review";
   if (suggestion.confidence < 0.75) return "sugg.status.unsure";
   return "sugg.status.confident";
+}
+
+// Anzeigetitel einer Notiz: KI-Titel, sonst erster Inhalts-Ausschnitt.
+export function noteDisplayTitle(note: Note, fallback: string) {
+  if (note.title.trim()) return note.title;
+  const firstLine = note.content.split("\n")[0]?.trim() ?? "";
+  return firstLine.slice(0, 60) || fallback;
 }
 
 export function projectProgress(project: Project, tasks: Task[]) {

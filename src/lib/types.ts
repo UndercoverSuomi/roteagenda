@@ -4,7 +4,9 @@ import type { Locale } from "@/lib/i18n";
 export type TaskStatus = "open" | "in_progress" | "done";
 export type TaskPriority = "low" | "medium" | "high";
 export type SuggestionState = "pending" | "accepted" | "rejected";
+export type SuggestionKind = "task" | "event";
 export type GoogleSyncTarget = "calendar" | "tasks";
+export type NoteSource = "manual" | "capture" | "url" | "image";
 
 export interface User {
   id: string;
@@ -40,16 +42,28 @@ export interface Task {
   updatedAt: string;
 }
 
-export interface RawNote {
+// Notizen sind die Kern-Entität: Rohtext plus KI-Veredelung
+// (Titel, ausformulierte Fassung, Tags, Projekt, verwandte Notizen).
+export interface Note {
   id: string;
+  title: string;
   content: string;
+  enhanced: string;
+  tags: string[];
+  projectId: string | null;
+  relatedNoteIds: string[];
+  source: NoteSource;
+  sourceUrl: string | null;
+  pinned: boolean;
   processed: boolean;
   createdAt: string;
+  updatedAt: string;
 }
 
 export interface AiSuggestion {
   id: string;
   rawNoteId: string;
+  kind: SuggestionKind;
   suggestedTitle: string;
   suggestedDescription: string;
   suggestedProjectId: string | null;
@@ -57,6 +71,9 @@ export interface AiSuggestion {
   confidence: number;
   priority: TaskPriority;
   dueDate: string | null;
+  // Nur bei kind="event": lokaler Zeitpunkt im Format YYYY-MM-DDTHH:MM.
+  eventStart: string | null;
+  eventEnd: string | null;
   reasoning: string;
   needsReview: boolean;
   state: SuggestionState;
@@ -73,6 +90,6 @@ export interface AppData {
   settings: UserSettings;
   projects: Project[];
   tasks: Task[];
-  rawNotes: RawNote[];
+  notes: Note[];
   suggestions: AiSuggestion[];
 }

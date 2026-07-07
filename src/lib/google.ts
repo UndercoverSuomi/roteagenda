@@ -1,5 +1,6 @@
 // Optionale Google-Integration: Aufgaben mit Datum landen im Google Kalender,
-// Aufgaben ohne Datum in Google Tasks.
+// Aufgaben ohne Datum in Google Tasks. Terminvorschläge der KI werden als
+// zeitgenaue Kalendereinträge übergeben.
 //
 // Ohne NEXT_PUBLIC_GOOGLE_CLIENT_ID funktioniert nur der Kalender-Weg über
 // die offizielle Vorbefüll-URL (öffnet Google Kalender mit fertigem Termin).
@@ -20,24 +21,51 @@ export type GoogleTaskInput = {
   dueDate: string | null;
 };
 
-export function buildCalendarTemplateUrl(task: {
+// start ist entweder ein ganzer Tag ("YYYY-MM-DD") oder ein lokaler
+// Zeitpunkt ("YYYY-MM-DDTHH:MM"). Ohne end: ganztägig +1 Tag, sonst +1 Stunde.
+export type CalendarEventInput = {
   title: string;
   description: string;
-  dueDate: string;
-}) {
-  const start = task.dueDate.replaceAll("-", "");
-  const end = toIsoDate(addDays(new Date(`${task.dueDate}T12:00:00`), 1)).replaceAll(
-    "-",
-    "",
-  );
+  start: string;
+  end?: string | null;
+};
+
+function isTimed(value: string) {
+  return value.includes("T");
+}
+
+function toTemplateStamp(value: string) {
+  const stamp = value.replaceAll("-", "").replaceAll(":", "");
+  return isTimed(value) ? `${stamp}00` : stamp;
+}
+
+function toTimeStamp(date: Date) {
+  const hours = String(date.getHours()).padStart(2, "0");
+  const minutes = String(date.getMinutes()).padStart(2, "0");
+  return `${toIsoDate(date)}T${hours}:${minutes}`;
+}
+
+function defaultEnd(start: string) {
+  if (isTimed(start)) {
+    const date = new Date(start);
+    date.setHours(date.getHours() + 1);
+    return toTimeStamp(date);
+  }
+
+  // Ganztägiger Termin: Ende ist der Folgetag (exklusiv).
+  return toIsoDate(addDays(new Date(`${start}T12:00:00`), 1));
+}
+
+export function buildCalendarTemplateUrl(event: CalendarEventInput) {
+  const end = event.end || defaultEnd(event.start);
 
   const params = new URLSearchParams({
     action: "TEMPLATE",
-    text: task.title,
-    dates: `${start}/${end}`,
+    text: event.title,
+    dates: `${toTemplateStamp(event.start)}/${toTemplateStamp(end)}`,
   });
-  if (task.description) {
-    params.set("details", task.description);
+  if (event.description) {
+    params.set("details", event.description);
   }
 
   return `https://calendar.google.com/calendar/render?${params.toString()}`;
@@ -66,19 +94,18 @@ export async function addTaskToGoogleTasks(task: GoogleTaskInput) {
   }
 }
 
-export async function addEventToGoogleCalendar(task: {
-  title: string;
-  description: string;
-  dueDate: string;
-}) {
+export async function addEventToGoogleCalendar(event: CalendarEventInput) {
   const token = await getAccessToken(CALENDAR_SCOPE);
-  const end = toIsoDate(addDays(new Date(`${task.dueDate}T12:00:00`), 1));
+  const end = event.end || defaultEnd(event.start);
+
+  const timed = isTimed(event.start);
+  const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
   const body: Record<string, unknown> = {
-    summary: task.title,
-    start: { date: task.dueDate },
-    end: { date: end },
+    summary: event.title,
+    start: timed ? { dateTime: `${event.start}:00`, timeZone } : { date: event.start },
+    end: timed ? { dateTime: `${end}:00`, timeZone } : { date: end },
   };
-  if (task.description) body.description = task.description;
+  if (event.description) body.description = event.description;
 
   const response = await fetch(
     "https://www.googleapis.com/calendar/v3/calendars/primary/events",

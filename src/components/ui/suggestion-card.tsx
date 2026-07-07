@@ -8,6 +8,11 @@ import { formatDateLabel } from "@/lib/date";
 import type { Locale, Translator } from "@/lib/i18n";
 import type { AiSuggestion, Project, TaskPriority } from "@/lib/types";
 
+// "2026-07-08T09:00" → "Mi, 08.07., 09:00" (bzw. Locale-Format).
+function formatEventTime(eventStart: string, locale: Locale) {
+  return `${formatDateLabel(eventStart.slice(0, 10), locale)}, ${eventStart.slice(11, 16)}`;
+}
+
 export function SuggestionCard({
   suggestion,
   projects,
@@ -36,11 +41,16 @@ export function SuggestionCard({
   onUpdate: (suggestion: AiSuggestion) => void;
 }) {
   const project = projects.find((item) => item.id === suggestion.suggestedProjectId);
+  const isEvent = suggestion.kind === "event";
 
   if (suggestion.state !== "pending") {
     return (
       <div className="rounded-[7px] border border-[var(--line)] bg-[var(--surface)] p-4 text-[13px] font-bold text-[var(--muted)]">
-        {suggestion.state === "accepted" ? t("sugg.accepted") : t("sugg.rejected")}
+        {suggestion.state === "accepted"
+          ? isEvent
+            ? t("sugg.eventAccepted")
+            : t("sugg.accepted")
+          : t("sugg.rejected")}
       </div>
     );
   }
@@ -74,13 +84,27 @@ export function SuggestionCard({
       </div>
 
       <dl className="mt-4 grid grid-cols-2 gap-3 text-[12px]">
+        {isEvent && suggestion.eventStart ? (
+          <InfoTile
+            label={t("sugg.eventTime")}
+            value={formatEventTime(suggestion.eventStart, locale)}
+          />
+        ) : (
+          <InfoTile
+            label={t("sugg.deadline")}
+            value={formatDateLabel(suggestion.dueDate, locale)}
+          />
+        )}
         <InfoTile
           label={t("sugg.project")}
           value={project?.title ?? suggestion.suggestedNewProjectTitle ?? t("sugg.unclear")}
         />
-        <InfoTile label={t("sugg.deadline")} value={formatDateLabel(suggestion.dueDate, locale)} />
-        <InfoTile label={t("sugg.priority")} value={t(priorityKeys[suggestion.priority])} />
-        <InfoTile label={t("sugg.source")} value={t("sugg.sourceValue")} />
+        {!isEvent ? (
+          <>
+            <InfoTile label={t("sugg.priority")} value={t(priorityKeys[suggestion.priority])} />
+            <InfoTile label={t("sugg.source")} value={t("sugg.sourceValue")} />
+          </>
+        ) : null}
       </dl>
 
       {!compact ? (
@@ -95,7 +119,7 @@ export function SuggestionCard({
           onClick={onAccept}
           className="rounded-[5px] bg-[var(--red)] px-3 py-3 text-[12px] font-bold text-white"
         >
-          {t("sugg.accept")}
+          {isEvent ? t("sugg.acceptEvent") : t("sugg.accept")}
         </button>
         <button
           type="button"
@@ -104,20 +128,24 @@ export function SuggestionCard({
         >
           {t("sugg.edit")}
         </button>
-        <button
-          type="button"
-          onClick={onEdit}
-          className="rounded-[5px] border border-[var(--line-strong)] px-3 py-3 text-[12px] font-bold"
-        >
-          {t("sugg.reassign")}
-        </button>
-        <button
-          type="button"
-          onClick={onCreateTask}
-          className="rounded-[5px] border border-[var(--line-strong)] px-3 py-3 text-[12px] font-bold"
-        >
-          {t("sugg.createTask")}
-        </button>
+        {!isEvent ? (
+          <>
+            <button
+              type="button"
+              onClick={onEdit}
+              className="rounded-[5px] border border-[var(--line-strong)] px-3 py-3 text-[12px] font-bold"
+            >
+              {t("sugg.reassign")}
+            </button>
+            <button
+              type="button"
+              onClick={onCreateTask}
+              className="rounded-[5px] border border-[var(--line-strong)] px-3 py-3 text-[12px] font-bold"
+            >
+              {t("sugg.createTask")}
+            </button>
+          </>
+        ) : null}
       </div>
       <button
         type="button"
@@ -144,8 +172,18 @@ function SuggestionEditor({
   onSave: (suggestion: AiSuggestion) => void;
 }) {
   const [draft, setDraft] = useState(suggestion);
+  const isEvent = draft.kind === "event";
   const inputClass =
     "h-11 w-full rounded-[5px] border border-[var(--line)] bg-[var(--field)] px-3 text-[13px] outline-none";
+
+  function handleSave() {
+    if (isEvent && draft.eventStart) {
+      // Termin-Datum konsistent halten.
+      onSave({ ...draft, dueDate: draft.eventStart.slice(0, 10) });
+      return;
+    }
+    onSave(draft);
+  }
 
   return (
     <article className="rounded-[7px] border border-[var(--line)] bg-[var(--surface-strong)] p-4 shadow-sm">
@@ -196,42 +234,58 @@ function SuggestionEditor({
             />
           </Field>
         ) : null}
-        <div className="grid grid-cols-2 gap-3">
-          <Field label={t("sugg.deadline")}>
+        {isEvent ? (
+          <Field label={t("sugg.eventStart")}>
             <input
-              type="date"
-              value={draft.dueDate ?? ""}
+              type="datetime-local"
+              value={draft.eventStart ?? ""}
               onChange={(event) =>
                 setDraft((current) => ({
                   ...current,
-                  dueDate: event.target.value || null,
+                  eventStart: event.target.value || current.eventStart,
                 }))
               }
               className={inputClass}
             />
           </Field>
-          <Field label={t("sugg.priority")}>
-            <select
-              value={draft.priority}
-              onChange={(event) =>
-                setDraft((current) => ({
-                  ...current,
-                  priority: event.target.value as TaskPriority,
-                }))
-              }
-              className={inputClass}
-            >
-              <option value="low">{t("priority.low")}</option>
-              <option value="medium">{t("priority.medium")}</option>
-              <option value="high">{t("priority.high")}</option>
-            </select>
-          </Field>
-        </div>
+        ) : (
+          <div className="grid grid-cols-2 gap-3">
+            <Field label={t("sugg.deadline")}>
+              <input
+                type="date"
+                value={draft.dueDate ?? ""}
+                onChange={(event) =>
+                  setDraft((current) => ({
+                    ...current,
+                    dueDate: event.target.value || null,
+                  }))
+                }
+                className={inputClass}
+              />
+            </Field>
+            <Field label={t("sugg.priority")}>
+              <select
+                value={draft.priority}
+                onChange={(event) =>
+                  setDraft((current) => ({
+                    ...current,
+                    priority: event.target.value as TaskPriority,
+                  }))
+                }
+                className={inputClass}
+              >
+                <option value="low">{t("priority.low")}</option>
+                <option value="medium">{t("priority.medium")}</option>
+                <option value="high">{t("priority.high")}</option>
+              </select>
+            </Field>
+          </div>
+        )}
       </div>
       <div className="mt-4 flex gap-2">
         <button
           type="button"
-          onClick={() => onSave(draft)}
+          onClick={handleSave}
           className="flex-1 rounded-[5px] bg-[var(--red)] px-3 py-3 text-[12px] font-bold text-white"
         >
           {t("common.save")}

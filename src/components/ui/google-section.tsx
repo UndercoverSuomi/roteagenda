@@ -42,7 +42,7 @@ export function GoogleSection({
         buildCalendarTemplateUrl({
           title: task.title,
           description: task.description,
-          dueDate: task.dueDate as string,
+          start: task.dueDate as string,
         }),
         "_blank",
         "noopener",
@@ -57,7 +57,7 @@ export function GoogleSection({
         await addEventToGoogleCalendar({
           title: task.title,
           description: task.description,
-          dueDate: task.dueDate as string,
+          start: task.dueDate as string,
         });
       } else {
         await addTaskToGoogleTasks({

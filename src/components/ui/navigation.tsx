@@ -1,4 +1,12 @@
-import { ClipboardList, Home, Inbox, MoreHorizontal, Plus, Search } from "lucide-react";
+import {
+  ClipboardList,
+  Home,
+  Inbox,
+  MoreHorizontal,
+  Plus,
+  Search,
+  StickyNote,
+} from "lucide-react";
 import { cx } from "@/components/app-helpers";
 import type { Screen } from "@/components/app-types";
 import { ThemeToggleButton } from "@/components/ui/controls";
@@ -16,11 +24,12 @@ export function BottomNav({
   t: Translator;
   onNavigate: (screen: Screen) => void;
 }) {
+  // "Mehr" ist mobil über das Menü im Heute-Header erreichbar.
   const items = [
     { screen: "today" as Screen, label: t("nav.today"), icon: Home },
+    { screen: "notes" as Screen, label: t("nav.notes"), icon: StickyNote },
     { screen: "projects" as Screen, label: t("nav.projects"), icon: ClipboardList },
     { screen: "inbox" as Screen, label: t("nav.inbox"), icon: Inbox, count: pendingCount },
-    { screen: "more" as Screen, label: t("nav.more"), icon: MoreHorizontal },
   ];
 
   return (
@@ -90,6 +99,7 @@ export function DesktopSidebar({
 }) {
   const items = [
     { screen: "today" as Screen, label: t("nav.today"), icon: Home },
+    { screen: "notes" as Screen, label: t("nav.notes"), icon: StickyNote },
     { screen: "projects" as Screen, label: t("nav.projects"), icon: ClipboardList },
     {
       screen: "inbox" as Screen,
@@ -117,6 +127,7 @@ export function DesktopSidebar({
           const active =
             screen === item.screen ||
             (screen === "project" && item.screen === "projects") ||
+            (screen === "note" && item.screen === "notes") ||
             (screen === "task" && item.screen === "today");
           return (
             <button

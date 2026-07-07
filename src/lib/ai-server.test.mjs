@@ -6,13 +6,13 @@ import {
   DEFAULT_AI_MODEL_ID,
 } from "./ai-models.ts";
 import {
-  buildProcessingResultFromProviderText,
-  callAiProvider,
+  buildNoteEnhancementFromProviderText,
+  callEnhanceProvider,
+  enhanceNoteWithProvider,
   extractImageText,
   extractProviderText,
   generateDailyBriefing,
   parseProviderJson,
-  processNoteWithProvider,
   resolveAiModelConfig,
   resolveTranscriptionConfig,
   resolveVisionConfig,
@@ -37,6 +37,18 @@ function jsonResponse(payload, status = 200) {
 
 function chatReply(content) {
   return jsonResponse({ choices: [{ message: { content } }] });
+}
+
+function enhancementPayload(overrides = {}) {
+  return JSON.stringify({
+    title: "Arzttermin Praxis41",
+    enhanced: "Morgen um 9 Uhr steht der Arzttermin in der Praxis41 an.",
+    tags: ["gesundheit"],
+    projectId: null,
+    relatedNoteIds: [],
+    suggestions: [],
+    ...overrides,
+  });
 }
 
 test("default model is one of the selectable AI models", () => {
@@ -95,35 +107,248 @@ test("provider JSON parsing rejects malformed responses", () => {
   );
 });
 
-test("provider JSON is converted into app suggestions", () => {
-  const result = buildProcessingResultFromProviderText({
-    note: "Chef meinte Angebot bis Freitag fertig machen",
-    nowIso: "2026-06-24T12:00:00.000Z",
-    idFactory: (prefix) => `${prefix}-fixed`,
-    providerText: JSON.stringify({
+test("json wrapped in markdown fences or prose is still parsed", () => {
+  assert.deepEqual(parseProviderJson('```json\n{"suggestions":[]}\n```'), {
+    suggestions: [],
+  });
+  assert.deepEqual(
+    parseProviderJson('Hier ist das Ergebnis:\n{"suggestions":[]}\nViel Erfolg!'),
+    { suggestions: [] },
+  );
+});
+
+test("a full enhancement payload is normalized into note fields and suggestions", () => {
+  const result = buildNoteEnhancementFromProviderText({
+    providerText: enhancementPayload({
+      tags: ["#Gesundheit", "Arzt ", "gesundheit"],
+      projectId: "project-unbekannt",
+      relatedNoteIds: ["note-a", "note-self", "note-x"],
       suggestions: [
         {
-          suggestedTitle: "Angebot fertigstellen",
-          suggestedDescription: "Angebot fuer den Kunden finalisieren.",
-          suggestedProjectId: "project-marketing",
+          kind: "event",
+          suggestedTitle: "Arzttermin Praxis41",
+          suggestedDescription: "Termin in der Praxis41 wahrnehmen.",
+          suggestedProjectId: "project-halluziniert",
           suggestedNewProjectTitle: null,
-          confidence: 0.88,
-          priority: "high",
-          dueDate: "2026-06-26",
-          reasoning: "Kunde, Angebot und Deadline deuten auf Marketing.",
+          confidence: 0.95,
+          priority: "medium",
+          dueDate: null,
+          eventStart: "2026-07-08T09:00",
+          eventEnd: null,
+          reasoning: "Datum und Uhrzeit sind klar erkennbar.",
+          needsReview: false,
+        },
+        {
+          kind: "task",
+          suggestedTitle: "Krankenkassenkarte einpacken",
+          suggestedDescription: "Vor dem Termin die Karte einstecken.",
+          suggestedProjectId: null,
+          suggestedNewProjectTitle: "Gesundheit",
+          confidence: 0.8,
+          priority: "medium",
+          dueDate: "2026-07-08",
+          eventStart: null,
+          eventEnd: null,
+          reasoning: "Sinnvolle Vorbereitung für den Termin.",
           needsReview: false,
         },
       ],
     }),
+    noteId: "note-self",
+    projectIds: ["project-1"],
+    otherNoteIds: ["note-a"],
+    nowIso: "2026-07-07T12:00:00.000Z",
+    idFactory: (prefix) => `${prefix}-fixed`,
   });
 
-  assert.equal(result.rawNote.id, "note-fixed");
-  assert.equal(result.rawNote.content, "Chef meinte Angebot bis Freitag fertig machen");
-  assert.equal(result.rawNote.processed, true);
-  assert.equal(result.suggestions.length, 1);
-  assert.equal(result.suggestions[0].id, "suggestion-0-fixed");
-  assert.equal(result.suggestions[0].rawNoteId, "note-fixed");
-  assert.equal(result.suggestions[0].state, "pending");
+  // Notiz-Anreicherung: Tags normalisiert, unbekannte IDs gefiltert.
+  assert.equal(result.enhancement.title, "Arzttermin Praxis41");
+  assert.deepEqual(result.enhancement.tags, ["gesundheit", "arzt"]);
+  assert.equal(result.enhancement.projectId, null);
+  assert.deepEqual(result.enhancement.relatedNoteIds, ["note-a"]);
+
+  // Terminvorschlag: eventStart gesetzt, dueDate abgeleitet, Projekt bereinigt.
+  const [event, task] = result.suggestions;
+  assert.equal(event.kind, "event");
+  assert.equal(event.rawNoteId, "note-self");
+  assert.equal(event.eventStart, "2026-07-08T09:00");
+  assert.equal(event.dueDate, "2026-07-08");
+  assert.equal(event.suggestedProjectId, null);
+  assert.equal(event.state, "pending");
+  assert.equal(task.kind, "task");
+  assert.equal(task.eventStart, null);
+});
+
+test("an empty suggestions list is a valid provider answer", () => {
+  const result = buildNoteEnhancementFromProviderText({
+    providerText: enhancementPayload(),
+    noteId: "note-1",
+    projectIds: [],
+    otherNoteIds: [],
+    nowIso: "2026-07-07T12:00:00.000Z",
+    idFactory: (prefix) => `${prefix}-fixed`,
+  });
+
+  assert.deepEqual(result.suggestions, []);
+  assert.equal(result.enhancement.enhanced.length > 0, true);
+});
+
+test("prompt contains the provided reference date with weekday", async () => {
+  const calls = [];
+  await callEnhanceProvider({
+    config: GLM_TEST_CONFIG,
+    noteId: "note-1",
+    content: "Angebot bis Freitag fertig machen",
+    projects: [],
+    today: "2026-06-24",
+    fetchFn: async (url, init) => {
+      calls.push({ url: String(url), init });
+      return chatReply(enhancementPayload());
+    },
+  });
+
+  const prompt = JSON.parse(calls[0].init.body).messages[1].content;
+  assert.match(prompt, /Heute ist Mittwoch, 2026-06-24\./);
+});
+
+test("english locale produces an english prompt and system message", async () => {
+  const calls = [];
+  await callEnhanceProvider({
+    config: GLM_TEST_CONFIG,
+    noteId: "note-1",
+    content: "Finish the proposal by Friday",
+    projects: [],
+    today: "2026-06-24",
+    locale: "en",
+    fetchFn: async (url, init) => {
+      calls.push({ url: String(url), init });
+      return chatReply(enhancementPayload());
+    },
+  });
+
+  const body = JSON.parse(calls[0].init.body);
+  assert.match(body.messages[0].content, /exclusively with JSON/);
+  assert.match(body.messages[1].content, /Today is Wednesday, 2026-06-24\./);
+  assert.match(body.messages[1].content, /in English/);
+});
+
+test("open tasks, tags and note candidates are listed in the prompt", async () => {
+  const calls = [];
+  await callEnhanceProvider({
+    config: GLM_TEST_CONFIG,
+    noteId: "note-1",
+    content: "Milch kaufen",
+    projects: [],
+    openTasks: [{ title: "Milch kaufen", projectId: "project-1", dueDate: "2026-07-08" }],
+    existingTags: ["haushalt"],
+    otherNotes: [{ id: "note-a", title: "Einkaufsliste", tags: ["haushalt"] }],
+    today: "2026-07-07",
+    fetchFn: async (url, init) => {
+      calls.push({ init });
+      return chatReply(enhancementPayload());
+    },
+  });
+
+  const prompt = JSON.parse(calls[0].init.body).messages[1].content;
+  assert.match(prompt, /Offene Aufgaben/);
+  assert.match(prompt, /Milch kaufen/);
+  assert.match(prompt, /Vorhandene Tags/);
+  assert.match(prompt, /haushalt/);
+  assert.match(prompt, /Vorhandene Notizen/);
+  assert.match(prompt, /Einkaufsliste/);
+  assert.match(prompt, /leere suggestions-Liste/);
+});
+
+test("note enhancement requests strict json output via response_format", async () => {
+  const calls = [];
+  await callEnhanceProvider({
+    config: GLM_TEST_CONFIG,
+    noteId: "note-1",
+    content: "Angebot fertig machen",
+    projects: [],
+    fetchFn: async (url, init) => {
+      calls.push({ init });
+      return chatReply(enhancementPayload());
+    },
+  });
+
+  const body = JSON.parse(calls[0].init.body);
+  assert.deepEqual(body.response_format, { type: "json_object" });
+});
+
+test("chat completion providers are called with configured endpoint and bearer key", async () => {
+  const calls = [];
+  await callEnhanceProvider({
+    config: GLM_TEST_CONFIG,
+    noteId: "note-1",
+    content: "Bitte Angebot fertig machen",
+    projects: [],
+    fetchFn: async (url, init) => {
+      calls.push({ url: String(url), init });
+      return chatReply(enhancementPayload());
+    },
+  });
+
+  assert.equal(calls[0].url, "https://example.test/v1/chat/completions");
+  assert.equal(calls[0].init.headers.Authorization, "Bearer secret-key");
+  assert.equal(JSON.parse(calls[0].init.body).model, "glm-test");
+});
+
+test("enhanceNoteWithProvider retries once after a malformed answer", async () => {
+  let attempt = 0;
+  const result = await enhanceNoteWithProvider({
+    config: GLM_TEST_CONFIG,
+    noteId: "note-1",
+    content: "Angebot fertig machen",
+    projects: [],
+    fetchFn: async () => {
+      attempt += 1;
+      return chatReply(
+        attempt === 1 ? "Tut mir leid, hier kommt Prosa statt JSON." : enhancementPayload(),
+      );
+    },
+  });
+
+  assert.equal(attempt, 2);
+  assert.equal(result.enhancement.title, "Arzttermin Praxis41");
+});
+
+test("enhanceNoteWithProvider gives up after the second malformed answer", async () => {
+  let attempt = 0;
+  await assert.rejects(
+    () =>
+      enhanceNoteWithProvider({
+        config: GLM_TEST_CONFIG,
+        noteId: "note-1",
+        content: "Angebot fertig machen",
+        projects: [],
+        fetchFn: async () => {
+          attempt += 1;
+          return chatReply("immer noch kein JSON");
+        },
+      }),
+    /KI-Antwort/,
+  );
+  assert.equal(attempt, 2);
+});
+
+test("enhanceNoteWithProvider does not retry provider HTTP errors", async () => {
+  let attempt = 0;
+  await assert.rejects(
+    () =>
+      enhanceNoteWithProvider({
+        config: GLM_TEST_CONFIG,
+        noteId: "note-1",
+        content: "Angebot fertig machen",
+        projects: [],
+        fetchFn: async () => {
+          attempt += 1;
+          return jsonResponse({ error: { message: "quota exceeded" } }, 429);
+        },
+      }),
+    /GLM 5\.2 konnte nicht antworten \(429\)/,
+  );
+  assert.equal(attempt, 1);
 });
 
 test("extracts JSON text from OpenAI Responses payloads", () => {
@@ -157,97 +382,6 @@ test("extracts JSON text from chat completions payloads", () => {
   assert.equal(text, "{\"suggestions\":[]}");
 });
 
-test("prompt contains the provided reference date with weekday", async () => {
-  const calls = [];
-  await callAiProvider({
-    config: {
-      id: "glm-5-2",
-      label: "GLM 5.2",
-      provider: "chat-completions",
-      apiKey: "secret-key",
-      model: "glm-test",
-      baseUrl: "https://example.test/v1",
-    },
-    note: "Angebot bis Freitag fertig machen",
-    projects: [],
-    today: "2026-06-24",
-    fetchFn: async (url, init) => {
-      calls.push({ url: String(url), init });
-      return new Response(
-        JSON.stringify({
-          choices: [{ message: { content: "{\"suggestions\":[]}" } }],
-        }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      );
-    },
-  });
-
-  const prompt = JSON.parse(calls[0].init.body).messages[1].content;
-  assert.match(prompt, /Heute ist Mittwoch, 2026-06-24\./);
-});
-
-test("english locale produces an english prompt and system message", async () => {
-  const calls = [];
-  await callAiProvider({
-    config: {
-      id: "glm-5-2",
-      label: "GLM 5.2",
-      provider: "chat-completions",
-      apiKey: "secret-key",
-      model: "glm-test",
-      baseUrl: "https://example.test/v1",
-    },
-    note: "Finish the proposal by Friday",
-    projects: [],
-    today: "2026-06-24",
-    locale: "en",
-    fetchFn: async (url, init) => {
-      calls.push({ url: String(url), init });
-      return new Response(
-        JSON.stringify({
-          choices: [{ message: { content: "{\"suggestions\":[]}" } }],
-        }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      );
-    },
-  });
-
-  const body = JSON.parse(calls[0].init.body);
-  assert.match(body.messages[0].content, /respond exclusively with JSON/);
-  assert.match(body.messages[1].content, /Today is Wednesday, 2026-06-24\./);
-  assert.match(body.messages[1].content, /in English/);
-});
-
-test("chat completion providers are called with configured endpoint and bearer key", async () => {
-  const calls = [];
-  const text = await callAiProvider({
-    config: {
-      id: "glm-5-2",
-      label: "GLM 5.2",
-      provider: "chat-completions",
-      apiKey: "secret-key",
-      model: "glm-test",
-      baseUrl: "https://example.test/v1",
-    },
-    note: "Bitte Angebot fertig machen",
-    projects: [],
-    fetchFn: async (url, init) => {
-      calls.push({ url: String(url), init });
-      return new Response(
-        JSON.stringify({
-          choices: [{ message: { content: "{\"suggestions\":[]}" } }],
-        }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      );
-    },
-  });
-
-  assert.equal(text, "{\"suggestions\":[]}");
-  assert.equal(calls[0].url, "https://example.test/v1/chat/completions");
-  assert.equal(calls[0].init.headers.Authorization, "Bearer secret-key");
-  assert.equal(JSON.parse(calls[0].init.body).model, "glm-test");
-});
-
 test("transcription requires the openrouter key", () => {
   const result = resolveTranscriptionConfig({});
 
@@ -264,12 +398,7 @@ test("transcription sends audio to an audio-capable openrouter model", async () 
     env: { OPENROUTER_API_KEY: "sk-or-test" },
     fetchFn: async (url, init) => {
       calls.push({ url: String(url), init });
-      return new Response(
-        JSON.stringify({
-          choices: [{ message: { content: " Angebot bis Freitag fertig machen " } }],
-        }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      );
+      return chatReply(" Angebot bis Freitag fertig machen ");
     },
   });
 
@@ -297,144 +426,11 @@ test("transcription model can be overridden via env", async () => {
     },
     fetchFn: async (url, init) => {
       calls.push({ init });
-      return new Response(
-        JSON.stringify({ choices: [{ message: { content: "ok" } }] }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      );
+      return chatReply("ok");
     },
   });
 
   assert.equal(JSON.parse(calls[0].init.body).model, "openai/gpt-4o-audio-preview");
-});
-
-test("json wrapped in markdown fences or prose is still parsed", () => {
-  assert.deepEqual(parseProviderJson('```json\n{"suggestions":[]}\n```'), {
-    suggestions: [],
-  });
-  assert.deepEqual(
-    parseProviderJson('Hier ist das Ergebnis:\n{"suggestions":[]}\nViel Erfolg!'),
-    { suggestions: [] },
-  );
-});
-
-test("an empty suggestions list is a valid provider answer", () => {
-  const result = buildProcessingResultFromProviderText({
-    note: "Milch kaufen",
-    nowIso: "2026-07-07T12:00:00.000Z",
-    idFactory: (prefix) => `${prefix}-fixed`,
-    providerText: JSON.stringify({ suggestions: [] }),
-  });
-
-  assert.equal(result.rawNote.processed, true);
-  assert.deepEqual(result.suggestions, []);
-});
-
-test("open tasks are listed in the prompt with a dedupe instruction", async () => {
-  const calls = [];
-  await callAiProvider({
-    config: GLM_TEST_CONFIG,
-    note: "Milch kaufen",
-    projects: [],
-    openTasks: [
-      { title: "Milch kaufen", projectId: "project-1", dueDate: "2026-07-08" },
-    ],
-    today: "2026-07-07",
-    fetchFn: async (url, init) => {
-      calls.push({ init });
-      return chatReply('{"suggestions":[]}');
-    },
-  });
-
-  const prompt = JSON.parse(calls[0].init.body).messages[1].content;
-  assert.match(prompt, /Bereits vorhandene offene Aufgaben/);
-  assert.match(prompt, /Milch kaufen/);
-  assert.match(prompt, /leere suggestions-Liste/);
-});
-
-test("note processing requests strict json output via response_format", async () => {
-  const calls = [];
-  await callAiProvider({
-    config: GLM_TEST_CONFIG,
-    note: "Angebot fertig machen",
-    projects: [],
-    fetchFn: async (url, init) => {
-      calls.push({ init });
-      return chatReply('{"suggestions":[]}');
-    },
-  });
-
-  const body = JSON.parse(calls[0].init.body);
-  assert.deepEqual(body.response_format, { type: "json_object" });
-});
-
-test("processNoteWithProvider retries once after a malformed answer", async () => {
-  let attempt = 0;
-  const result = await processNoteWithProvider({
-    config: GLM_TEST_CONFIG,
-    note: "Angebot fertig machen",
-    projects: [],
-    fetchFn: async () => {
-      attempt += 1;
-      return chatReply(
-        attempt === 1
-          ? "Tut mir leid, hier kommt Prosa statt JSON."
-          : JSON.stringify({
-              suggestions: [
-                {
-                  suggestedTitle: "Angebot fertigstellen",
-                  suggestedDescription: "Angebot finalisieren.",
-                  suggestedProjectId: null,
-                  suggestedNewProjectTitle: "Vertrieb",
-                  confidence: 0.9,
-                  priority: "high",
-                  dueDate: null,
-                  reasoning: "Klare Aufgabe.",
-                  needsReview: false,
-                },
-              ],
-            }),
-      );
-    },
-  });
-
-  assert.equal(attempt, 2);
-  assert.equal(result.suggestions.length, 1);
-});
-
-test("processNoteWithProvider gives up after the second malformed answer", async () => {
-  let attempt = 0;
-  await assert.rejects(
-    () =>
-      processNoteWithProvider({
-        config: GLM_TEST_CONFIG,
-        note: "Angebot fertig machen",
-        projects: [],
-        fetchFn: async () => {
-          attempt += 1;
-          return chatReply("immer noch kein JSON");
-        },
-      }),
-    /KI-Antwort/,
-  );
-  assert.equal(attempt, 2);
-});
-
-test("processNoteWithProvider does not retry provider HTTP errors", async () => {
-  let attempt = 0;
-  await assert.rejects(
-    () =>
-      processNoteWithProvider({
-        config: GLM_TEST_CONFIG,
-        note: "Angebot fertig machen",
-        projects: [],
-        fetchFn: async () => {
-          attempt += 1;
-          return jsonResponse({ error: { message: "quota exceeded" } }, 429);
-        },
-      }),
-    /GLM 5\.2 konnte nicht antworten \(429\)/,
-  );
-  assert.equal(attempt, 1);
 });
 
 test("photo extraction requires the openrouter key and sends the image", async () => {
@@ -494,7 +490,7 @@ test("daily briefing sends tasks as plain-text request without response_format",
 test("provider HTTP errors are surfaced clearly", async () => {
   await assert.rejects(
     () =>
-      callAiProvider({
+      callEnhanceProvider({
         config: {
           id: "deepseek-v4-flash",
           label: "DeepSeek V4 Flash",
@@ -503,7 +499,8 @@ test("provider HTTP errors are surfaced clearly", async () => {
           model: "deepseek-v4-flash",
           baseUrl: "https://example.test",
         },
-        note: "Bitte Angebot fertig machen",
+        noteId: "note-1",
+        content: "Bitte Angebot fertig machen",
         projects: [],
         fetchFn: async () =>
           new Response(JSON.stringify({ error: { message: "quota exceeded" } }), {

@@ -1,12 +1,12 @@
 import { ArrowLeft, Edit3, Plus } from "lucide-react";
-import { cx, projectProgress } from "@/components/app-helpers";
+import { cx, noteDisplayTitle, projectProgress } from "@/components/app-helpers";
 import type { ProjectDetailTab } from "@/components/app-types";
 import { DetailTabs } from "@/components/ui/controls";
 import { ProgressBar, ScreenHeader } from "@/components/ui/primitives";
 import { TaskLine } from "@/components/ui/task-items";
 import { formatDateLabel } from "@/lib/date";
 import type { Locale, Translator } from "@/lib/i18n";
-import type { Project, RawNote, Task } from "@/lib/types";
+import type { Note, Project, Task } from "@/lib/types";
 
 export function ProjectDetailScreen({
   project,
@@ -19,13 +19,14 @@ export function ProjectDetailScreen({
   onTabChange,
   onOpenTask,
   onToggleTask,
+  onOpenNote,
   onAddTask,
   onToggleAi,
   onEdit,
 }: {
   project: Project;
   tasks: Task[];
-  notes: RawNote[];
+  notes: Note[];
   tab: ProjectDetailTab;
   locale: Locale;
   t: Translator;
@@ -33,6 +34,7 @@ export function ProjectDetailScreen({
   onTabChange: (tab: ProjectDetailTab) => void;
   onOpenTask: (taskId: string) => void;
   onToggleTask: (taskId: string) => void;
+  onOpenNote: (noteId: string) => void;
   onAddTask: () => void;
   onToggleAi: () => void;
   onEdit: () => void;
@@ -150,19 +152,24 @@ export function ProjectDetailScreen({
           notes.length ? (
             <div className="space-y-3 pt-5">
               {notes.map((note) => (
-                <div
+                <button
                   key={note.id}
-                  className="rounded-[6px] border border-[var(--line)] bg-[var(--surface)] p-4"
+                  type="button"
+                  onClick={() => onOpenNote(note.id)}
+                  className="block w-full rounded-[6px] border border-[var(--line)] bg-[var(--surface)] p-4 text-left transition hover:bg-[var(--surface-strong)]"
                 >
-                  <p className="text-[13px] leading-6 text-[var(--ink-soft)]">
-                    {note.content}
+                  <p className="truncate text-[13px] font-bold">
+                    {noteDisplayTitle(note, t("notes.untitled"))}
+                  </p>
+                  <p className="mt-1 line-clamp-3 text-[13px] leading-6 text-[var(--ink-soft)]">
+                    {note.enhanced || note.content}
                   </p>
                   <p className="mt-2 text-[11px] font-semibold uppercase tracking-[0.04em] text-[var(--muted)]">
                     {t("project.noteMeta", {
                       date: formatDateLabel(note.createdAt.slice(0, 10), locale),
                     })}
                   </p>
-                </div>
+                </button>
               ))}
             </div>
           ) : (

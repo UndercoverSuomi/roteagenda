@@ -82,12 +82,22 @@ const COLLECTIONS = [
     ],
   },
   {
+    // App-seitig "Notizen"; historische Collection-ID bleibt "rawNotes".
     id: "rawNotes",
     attributes: [
       string("id", 64),
       string("content", 8192),
       boolean("processed"),
+      string("title", 256, false),
+      string("enhanced", 8192, false),
+      string("tags", 64, false, true),
+      string("projectId", 64, false),
+      string("relatedNoteIds", 64, false, true),
+      string("source", 16, false),
+      string("sourceUrl", 1024, false),
+      boolean("pinned", false),
       string("createdAt", 32),
+      string("updatedAt", 32, false),
     ],
   },
   {
@@ -95,6 +105,7 @@ const COLLECTIONS = [
     attributes: [
       string("id", 64),
       string("rawNoteId", 64),
+      string("kind", 8, false),
       string("suggestedTitle", 256),
       string("suggestedDescription", 4096, false),
       string("suggestedProjectId", 64, false),
@@ -102,6 +113,8 @@ const COLLECTIONS = [
       float("confidence"),
       string("priority", 16),
       string("dueDate", 16, false),
+      string("eventStart", 32, false),
+      string("eventEnd", 32, false),
       string("reasoning", 4096, false),
       boolean("needsReview"),
       string("state", 16),

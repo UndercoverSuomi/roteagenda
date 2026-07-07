@@ -50,10 +50,26 @@ function restoreNullableFields(key: CollectionKey, item: Record<string, unknown>
     data.googleSynced ??= null;
   }
 
+  if (key === "notes") {
+    // Bestandsnotizen aus der Capture-Ära bekommen die neuen Felder als Defaults.
+    data.title ??= "";
+    data.enhanced ??= "";
+    data.tags ??= [];
+    data.projectId ??= null;
+    data.relatedNoteIds ??= [];
+    data.source ??= "capture";
+    data.sourceUrl ??= null;
+    data.pinned ??= false;
+    data.updatedAt ??= data.createdAt ?? "";
+  }
+
   if (key === "suggestions") {
+    data.kind ??= "task";
     data.suggestedProjectId ??= null;
     data.suggestedNewProjectTitle ??= null;
     data.dueDate ??= null;
+    data.eventStart ??= null;
+    data.eventEnd ??= null;
   }
 
   return data;

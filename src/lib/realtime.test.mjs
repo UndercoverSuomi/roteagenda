@@ -9,7 +9,7 @@ function emptyData() {
     settings: { aiModel: "openai-gpt-5-5", locale: "de" },
     projects: [],
     tasks: [],
-    rawNotes: [],
+    notes: [],
     suggestions: [],
   };
 }
@@ -80,6 +80,28 @@ test("delete events remove the item and ignore unknown ids", () => {
 
   const unchanged = applyRealtimeEvent(afterDelete, DELETE, taskDocument());
   assert.equal(unchanged, afterDelete);
+});
+
+test("note documents route to the notes list via the legacy collection id", () => {
+  const noteDoc = {
+    $id: "doc-9",
+    $collectionId: "rawNotes",
+    $databaseId: "roteagenda",
+    $permissions: [],
+    id: "note-1",
+    content: "Alte Capture-Notiz",
+    processed: true,
+    createdAt: "2026-07-07T10:00:00.000Z",
+  };
+  const events = ["databases.roteagenda.collections.rawNotes.documents.doc-9.create"];
+
+  const next = applyRealtimeEvent(emptyData(), events, noteDoc);
+
+  assert.equal(next.notes.length, 1);
+  // Neue Felder werden für Bestandsdokumente mit Defaults ergänzt.
+  assert.deepEqual(next.notes[0].tags, []);
+  assert.equal(next.notes[0].pinned, false);
+  assert.equal(next.notes[0].source, "capture");
 });
 
 test("events for unknown collections or malformed payloads are ignored", () => {
