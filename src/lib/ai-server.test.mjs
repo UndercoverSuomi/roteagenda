@@ -8,12 +8,36 @@ import {
 import {
   buildProcessingResultFromProviderText,
   callAiProvider,
+  extractImageText,
   extractProviderText,
+  generateDailyBriefing,
   parseProviderJson,
+  processNoteWithProvider,
   resolveAiModelConfig,
   resolveTranscriptionConfig,
+  resolveVisionConfig,
   transcribeAudio,
 } from "./ai-server.ts";
+
+const GLM_TEST_CONFIG = {
+  id: "glm-5-2",
+  label: "GLM 5.2",
+  provider: "chat-completions",
+  apiKey: "secret-key",
+  model: "glm-test",
+  baseUrl: "https://example.test/v1",
+};
+
+function jsonResponse(payload, status = 200) {
+  return new Response(JSON.stringify(payload), {
+    status,
+    headers: { "content-type": "application/json" },
+  });
+}
+
+function chatReply(content) {
+  return jsonResponse({ choices: [{ message: { content } }] });
+}
 
 test("default model is one of the selectable AI models", () => {
   assert.ok(AI_MODEL_OPTIONS.some((option) => option.id === DEFAULT_AI_MODEL_ID));
@@ -281,6 +305,190 @@ test("transcription model can be overridden via env", async () => {
   });
 
   assert.equal(JSON.parse(calls[0].init.body).model, "openai/gpt-4o-audio-preview");
+});
+
+test("json wrapped in markdown fences or prose is still parsed", () => {
+  assert.deepEqual(parseProviderJson('```json\n{"suggestions":[]}\n```'), {
+    suggestions: [],
+  });
+  assert.deepEqual(
+    parseProviderJson('Hier ist das Ergebnis:\n{"suggestions":[]}\nViel Erfolg!'),
+    { suggestions: [] },
+  );
+});
+
+test("an empty suggestions list is a valid provider answer", () => {
+  const result = buildProcessingResultFromProviderText({
+    note: "Milch kaufen",
+    nowIso: "2026-07-07T12:00:00.000Z",
+    idFactory: (prefix) => `${prefix}-fixed`,
+    providerText: JSON.stringify({ suggestions: [] }),
+  });
+
+  assert.equal(result.rawNote.processed, true);
+  assert.deepEqual(result.suggestions, []);
+});
+
+test("open tasks are listed in the prompt with a dedupe instruction", async () => {
+  const calls = [];
+  await callAiProvider({
+    config: GLM_TEST_CONFIG,
+    note: "Milch kaufen",
+    projects: [],
+    openTasks: [
+      { title: "Milch kaufen", projectId: "project-1", dueDate: "2026-07-08" },
+    ],
+    today: "2026-07-07",
+    fetchFn: async (url, init) => {
+      calls.push({ init });
+      return chatReply('{"suggestions":[]}');
+    },
+  });
+
+  const prompt = JSON.parse(calls[0].init.body).messages[1].content;
+  assert.match(prompt, /Bereits vorhandene offene Aufgaben/);
+  assert.match(prompt, /Milch kaufen/);
+  assert.match(prompt, /leere suggestions-Liste/);
+});
+
+test("note processing requests strict json output via response_format", async () => {
+  const calls = [];
+  await callAiProvider({
+    config: GLM_TEST_CONFIG,
+    note: "Angebot fertig machen",
+    projects: [],
+    fetchFn: async (url, init) => {
+      calls.push({ init });
+      return chatReply('{"suggestions":[]}');
+    },
+  });
+
+  const body = JSON.parse(calls[0].init.body);
+  assert.deepEqual(body.response_format, { type: "json_object" });
+});
+
+test("processNoteWithProvider retries once after a malformed answer", async () => {
+  let attempt = 0;
+  const result = await processNoteWithProvider({
+    config: GLM_TEST_CONFIG,
+    note: "Angebot fertig machen",
+    projects: [],
+    fetchFn: async () => {
+      attempt += 1;
+      return chatReply(
+        attempt === 1
+          ? "Tut mir leid, hier kommt Prosa statt JSON."
+          : JSON.stringify({
+              suggestions: [
+                {
+                  suggestedTitle: "Angebot fertigstellen",
+                  suggestedDescription: "Angebot finalisieren.",
+                  suggestedProjectId: null,
+                  suggestedNewProjectTitle: "Vertrieb",
+                  confidence: 0.9,
+                  priority: "high",
+                  dueDate: null,
+                  reasoning: "Klare Aufgabe.",
+                  needsReview: false,
+                },
+              ],
+            }),
+      );
+    },
+  });
+
+  assert.equal(attempt, 2);
+  assert.equal(result.suggestions.length, 1);
+});
+
+test("processNoteWithProvider gives up after the second malformed answer", async () => {
+  let attempt = 0;
+  await assert.rejects(
+    () =>
+      processNoteWithProvider({
+        config: GLM_TEST_CONFIG,
+        note: "Angebot fertig machen",
+        projects: [],
+        fetchFn: async () => {
+          attempt += 1;
+          return chatReply("immer noch kein JSON");
+        },
+      }),
+    /KI-Antwort/,
+  );
+  assert.equal(attempt, 2);
+});
+
+test("processNoteWithProvider does not retry provider HTTP errors", async () => {
+  let attempt = 0;
+  await assert.rejects(
+    () =>
+      processNoteWithProvider({
+        config: GLM_TEST_CONFIG,
+        note: "Angebot fertig machen",
+        projects: [],
+        fetchFn: async () => {
+          attempt += 1;
+          return jsonResponse({ error: { message: "quota exceeded" } }, 429);
+        },
+      }),
+    /GLM 5\.2 konnte nicht antworten \(429\)/,
+  );
+  assert.equal(attempt, 1);
+});
+
+test("photo extraction requires the openrouter key and sends the image", async () => {
+  const missing = resolveVisionConfig({});
+  assert.equal(missing.ok, false);
+  assert.match(missing.error, /OPENROUTER_API_KEY/);
+
+  const calls = [];
+  const text = await extractImageText({
+    imageBase64: "QUJD",
+    locale: "de",
+    env: {
+      OPENROUTER_API_KEY: "sk-or-test",
+      OPENROUTER_VISION_MODEL: "google/gemini-2.5-pro",
+    },
+    fetchFn: async (url, init) => {
+      calls.push({ url: String(url), init });
+      return chatReply(" Einkauf: Milch, Brot ");
+    },
+  });
+
+  assert.equal(text, "Einkauf: Milch, Brot");
+  assert.equal(calls[0].url, "https://openrouter.ai/api/v1/chat/completions");
+  const body = JSON.parse(calls[0].init.body);
+  assert.equal(body.model, "google/gemini-2.5-pro");
+  const imagePart = body.messages[0].content.find((part) => part.type === "image_url");
+  assert.equal(imagePart.image_url.url, "data:image/jpeg;base64,QUJD");
+});
+
+test("daily briefing sends tasks as plain-text request without response_format", async () => {
+  const calls = [];
+  const text = await generateDailyBriefing({
+    config: GLM_TEST_CONFIG,
+    tasks: [
+      {
+        title: "Angebot fertigstellen",
+        dueDate: "2026-07-07",
+        priority: "high",
+        project: "Vertrieb",
+      },
+    ],
+    today: "2026-07-07",
+    locale: "de",
+    fetchFn: async (url, init) => {
+      calls.push({ init });
+      return chatReply(" Heute steht das Angebot an. ");
+    },
+  });
+
+  assert.equal(text, "Heute steht das Angebot an.");
+  const body = JSON.parse(calls[0].init.body);
+  assert.equal(body.response_format, undefined);
+  assert.match(body.messages[1].content, /Heute ist Dienstag, 2026-07-07\./);
+  assert.match(body.messages[1].content, /Angebot fertigstellen/);
 });
 
 test("provider HTTP errors are surfaced clearly", async () => {

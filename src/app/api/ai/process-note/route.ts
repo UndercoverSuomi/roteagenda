@@ -2,9 +2,9 @@ import { NextResponse } from "next/server";
 import { MAX_NOTE_LENGTH } from "@/lib/ai-models";
 import { isLocale } from "@/lib/i18n";
 import {
-  buildProcessingResultFromProviderText,
-  callAiProvider,
+  processNoteWithProvider,
   resolveAiModelConfig,
+  type OpenTaskContext,
 } from "@/lib/ai-server";
 import {
   createRateLimiter,
@@ -19,11 +19,15 @@ type ProcessNoteRequestBody = {
   note?: unknown;
   modelId?: unknown;
   projects?: unknown;
+  openTasks?: unknown;
   today?: unknown;
   locale?: unknown;
 };
 
 const enforceRateLimit = createRateLimiter(10 * 60_000, 20);
+
+// Serverseitige Obergrenze, damit der Prompt nicht beliebig wächst.
+const MAX_OPEN_TASKS = 150;
 
 type RequestProject = Pick<
   Project,
@@ -39,6 +43,7 @@ export async function POST(request: Request) {
     const note = readNote(body.note);
     const modelId = readModelId(body.modelId);
     const projects = readProjects(body.projects);
+    const openTasks = readOpenTasks(body.openTasks);
     const today = readToday(body.today);
     const locale = readLocale(body.locale);
     const resolved = resolveAiModelConfig(modelId);
@@ -47,16 +52,13 @@ export async function POST(request: Request) {
       return jsonError(resolved.error, resolved.status);
     }
 
-    const providerText = await callAiProvider({
+    const result = await processNoteWithProvider({
       config: resolved.config,
       note,
       projects,
+      openTasks,
       today,
       locale,
-    });
-    const result = buildProcessingResultFromProviderText({
-      note,
-      providerText,
     });
 
     return NextResponse.json({
@@ -144,6 +146,31 @@ function readProjects(value: unknown): RequestProject[] {
     };
 
     return project;
+  });
+}
+
+// Optionaler Kontext: offene Aufgaben zur Duplikat-Vermeidung.
+function readOpenTasks(value: unknown): OpenTaskContext[] {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value)) {
+    throw new RouteError("Die Aufgabenliste für die KI-Anfrage ist ungültig.", 400);
+  }
+
+  return value.slice(0, MAX_OPEN_TASKS).flatMap((item) => {
+    if (!isRecord(item) || typeof item.title !== "string" || !item.title.trim()) {
+      return [];
+    }
+
+    return [
+      {
+        title: item.title,
+        projectId: typeof item.projectId === "string" ? item.projectId : null,
+        dueDate:
+          typeof item.dueDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(item.dueDate)
+            ? item.dueDate
+            : null,
+      },
+    ];
   });
 }
 

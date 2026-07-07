@@ -1,12 +1,13 @@
 "use client";
 
-import { ArrowLeft, Loader2, Mic, Sparkles } from "lucide-react";
+import { ArrowLeft, Camera, Loader2, Mic, Sparkles } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { cx } from "@/components/app-helpers";
 import { SuggestionCard } from "@/components/ui/suggestion-card";
 import { ScreenHeader } from "@/components/ui/primitives";
-import { transcribeVoiceNote } from "@/lib/ai-client";
+import { extractPhotoText, transcribeVoiceNote } from "@/lib/ai-client";
 import { MAX_NOTE_LENGTH } from "@/lib/ai-models";
+import { fileToJpegBase64 } from "@/lib/image";
 import {
   blobToWavBase64,
   isRecordingSupported,
@@ -24,6 +25,7 @@ export function CaptureScreen({
   editingSuggestionId,
   modelLabel,
   error,
+  notice,
   isProcessing,
   locale,
   t,
@@ -42,6 +44,7 @@ export function CaptureScreen({
   editingSuggestionId: string | null;
   modelLabel: string;
   error: string | null;
+  notice: string | null;
   isProcessing: boolean;
   locale: Locale;
   t: Translator;
@@ -55,12 +58,14 @@ export function CaptureScreen({
   onUpdateSuggestion: (suggestion: AiSuggestion) => void;
 }) {
   const [micState, setMicState] = useState<"idle" | "recording" | "transcribing">("idle");
+  const [photoState, setPhotoState] = useState<"idle" | "processing">("idle");
   // Der Capture-Screen wird nie serverseitig gerendert,
   // daher ist die direkte Browser-Erkennung hydration-sicher.
   const [isMicSupported] = useState(() => isRecordingSupported());
-  const [micError, setMicError] = useState<string | null>(null);
+  const [mediaError, setMediaError] = useState<string | null>(null);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const recordingRef = useRef<ActiveRecording | null>(null);
+  const photoInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     return () => {
@@ -87,7 +92,7 @@ export function CaptureScreen({
   }, [micState]);
 
   async function beginRecording() {
-    setMicError(null);
+    setMediaError(null);
     setElapsedSeconds(0);
 
     try {
@@ -98,7 +103,7 @@ export function CaptureScreen({
       const denied =
         recordError instanceof DOMException &&
         (recordError.name === "NotAllowedError" || recordError.name === "SecurityError");
-      setMicError(t(denied ? "capture.mic.denied" : "capture.mic.error"));
+      setMediaError(t(denied ? "capture.mic.denied" : "capture.mic.error"));
     }
   }
 
@@ -116,7 +121,7 @@ export function CaptureScreen({
       setMicState("idle");
     } catch (transcribeError) {
       setMicState("idle");
-      setMicError(
+      setMediaError(
         transcribeError instanceof Error && transcribeError.message
           ? transcribeError.message
           : t("capture.mic.error"),
@@ -132,11 +137,46 @@ export function CaptureScreen({
     }
   }
 
+  async function handlePhotoSelected(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    // Dieselbe Datei soll erneut wählbar sein.
+    event.target.value = "";
+    if (!file) return;
+
+    setMediaError(null);
+    setPhotoState("processing");
+
+    try {
+      const imageBase64 = await fileToJpegBase64(file);
+      const text = await extractPhotoText({ imageBase64, locale });
+      onAppendText(text);
+      setPhotoState("idle");
+    } catch (photoError) {
+      setPhotoState("idle");
+      setMediaError(
+        photoError instanceof Error && photoError.message
+          ? photoError.message
+          : t("capture.photo.error"),
+      );
+    }
+  }
+
   function formatSeconds(totalSeconds: number) {
     const minutes = Math.floor(totalSeconds / 60);
     const seconds = String(totalSeconds % 60).padStart(2, "0");
     return `${minutes}:${seconds}`;
   }
+
+  const mediaStatus =
+    micState === "recording"
+      ? `${t("capture.mic.listening")} (${formatSeconds(elapsedSeconds)} / ${formatSeconds(MAX_RECORDING_SECONDS)})`
+      : micState === "transcribing"
+        ? t("capture.mic.transcribing")
+        : photoState === "processing"
+          ? t("capture.photo.processing")
+          : isMicSupported
+            ? t("capture.mic.start")
+            : t("capture.photo.start");
 
   return (
     <div className="flex flex-1 flex-col px-6 pt-3 md:px-8 md:pt-8 lg:px-10">
@@ -156,12 +196,12 @@ export function CaptureScreen({
           placeholder={t("capture.placeholder")}
           className="min-h-44 w-full resize-none bg-transparent text-[16px] leading-7 outline-none placeholder:text-[var(--muted)]"
         />
-        {isMicSupported ? (
-          <div className="mt-2 flex items-center gap-3">
+        <div className="mt-2 flex items-center gap-3">
+          {isMicSupported ? (
             <button
               type="button"
               onClick={toggleRecording}
-              disabled={micState === "transcribing"}
+              disabled={micState === "transcribing" || photoState === "processing"}
               aria-label={
                 micState === "recording" ? t("capture.mic.stop") : t("capture.mic.start")
               }
@@ -178,18 +218,32 @@ export function CaptureScreen({
                 <Mic className="h-5 w-5" />
               )}
             </button>
-            <span className="text-[12px] leading-5 text-[var(--muted)]">
-              {micState === "recording"
-                ? `${t("capture.mic.listening")} (${formatSeconds(elapsedSeconds)} / ${formatSeconds(MAX_RECORDING_SECONDS)})`
-                : micState === "transcribing"
-                  ? t("capture.mic.transcribing")
-                  : t("capture.mic.start")}
-            </span>
-          </div>
-        ) : null}
-        {micError ? (
+          ) : null}
+          <button
+            type="button"
+            onClick={() => photoInputRef.current?.click()}
+            disabled={photoState === "processing" || micState !== "idle"}
+            aria-label={t("capture.photo.start")}
+            className="grid h-11 w-11 shrink-0 place-items-center rounded-full border border-[var(--line-strong)] text-[var(--ink)] transition hover:bg-[var(--surface-strong)] disabled:opacity-60"
+          >
+            {photoState === "processing" ? (
+              <Loader2 className="h-5 w-5 animate-spin" />
+            ) : (
+              <Camera className="h-5 w-5" />
+            )}
+          </button>
+          <input
+            ref={photoInputRef}
+            type="file"
+            accept="image/*"
+            className="hidden"
+            onChange={handlePhotoSelected}
+          />
+          <span className="text-[12px] leading-5 text-[var(--muted)]">{mediaStatus}</span>
+        </div>
+        {mediaError ? (
           <p className="mt-3 rounded-[5px] border border-[var(--line-strong)] bg-[var(--surface-strong)] p-3 text-[12px] leading-5 text-[var(--muted)]">
-            {micError}
+            {mediaError}
           </p>
         ) : null}
         <button
@@ -204,6 +258,11 @@ export function CaptureScreen({
         {error ? (
           <p className="mt-3 rounded-[5px] border border-[var(--red)] bg-[var(--surface-strong)] p-3 text-[12px] leading-5 text-[var(--red)]">
             {error}
+          </p>
+        ) : null}
+        {notice ? (
+          <p className="mt-3 rounded-[5px] border border-[var(--line-strong)] bg-[var(--surface-strong)] p-3 text-[12px] leading-5 text-[var(--ink-soft)]">
+            {notice}
           </p>
         ) : null}
       </div>

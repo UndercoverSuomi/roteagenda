@@ -35,7 +35,7 @@ import { DesktopInsightPanel } from "@/components/ui/insight-panel";
 import { BottomNav, DesktopSidebar } from "@/components/ui/navigation";
 import { AppShellMessage, WorkSurface } from "@/components/ui/primitives";
 import { UndoToast } from "@/components/ui/undo-toast";
-import { processRawNoteWithConfiguredAi } from "@/lib/ai-client";
+import { fetchDailyBriefing, processRawNoteWithConfiguredAi } from "@/lib/ai-client";
 import { getAiModelLabel, MAX_NOTE_LENGTH, type AiModelId } from "@/lib/ai-models";
 import { createEmptyAppData } from "@/lib/app-data";
 import { buildAppUrl, parseAppUrl } from "@/lib/app-url";
@@ -140,7 +140,11 @@ export function RoteAgendaApp() {
   const [searchQuery, setSearchQuery] = useState("");
   const [activeSuggestions, setActiveSuggestions] = useState<AiSuggestion[]>([]);
   const [captureError, setCaptureError] = useState<string | null>(null);
+  const [captureNotice, setCaptureNotice] = useState<string | null>(null);
   const [isProcessingNote, setIsProcessingNote] = useState(false);
+  const [briefing, setBriefing] = useState<string | null>(null);
+  const [briefingError, setBriefingError] = useState<string | null>(null);
+  const [isBriefingLoading, setIsBriefingLoading] = useState(false);
   const [editingTask, setEditingTask] = useState<Task | null>(null);
   const [editingProject, setEditingProject] = useState<Project | null>(null);
   const [editingSuggestionId, setEditingSuggestionId] = useState<string | null>(null);
@@ -492,6 +496,7 @@ export function RoteAgendaApp() {
     if (!trimmed) return;
 
     setCaptureError(null);
+    setCaptureNotice(null);
     setIsProcessingNote(true);
 
     try {
@@ -499,6 +504,15 @@ export function RoteAgendaApp() {
         note: trimmed,
         modelId: data.settings.aiModel,
         projects: data.projects,
+        // Offene Aufgaben als Kontext, damit die KI keine Duplikate vorschlägt.
+        openTasks: data.tasks
+          .filter((task) => task.status !== "done")
+          .slice(0, 120)
+          .map((task) => ({
+            title: task.title,
+            projectId: task.projectId,
+            dueDate: task.dueDate,
+          })),
         locale,
       });
       setData((current) => ({
@@ -508,6 +522,9 @@ export function RoteAgendaApp() {
       }));
       setActiveSuggestions(result.suggestions);
       setCaptureText("");
+      if (!result.suggestions.length) {
+        setCaptureNotice(t("capture.noNewTasks"));
+      }
       persist(t("entity.rawNote"), {
         kind: "upsert",
         collection: "rawNotes",
@@ -902,6 +919,9 @@ export function RoteAgendaApp() {
     setSearchQuery("");
     setUndo(null);
     setUsedCachedData(false);
+    setBriefing(null);
+    setBriefingError(null);
+    setCaptureNotice(null);
     setScreen(hasSeenWelcome() ? "today" : "welcome");
     if (typeof window !== "undefined") {
       window.history.replaceState(null, "", "/");
@@ -916,6 +936,7 @@ export function RoteAgendaApp() {
     }));
     setActiveSuggestions([]);
     setUndo(null);
+    setBriefing(null);
     goTo("today", { replace: true, projectId: "", taskId: "" });
     persist(t("entity.deleteAll"), { kind: "deleteAll" });
   }
@@ -946,6 +967,36 @@ export function RoteAgendaApp() {
   function handleThemeChange(preference: ThemePreference) {
     setThemePref(preference);
     storeTheme(preference);
+  }
+
+  async function handleGenerateBriefing() {
+    const openTasks = data.tasks.filter((task) => task.status !== "done");
+    setBriefingError(null);
+
+    // Ohne offene Aufgaben braucht es keinen KI-Aufruf.
+    if (!openTasks.length) {
+      setBriefing(t("briefing.empty"));
+      return;
+    }
+
+    setIsBriefingLoading(true);
+    try {
+      const text = await fetchDailyBriefing({
+        modelId: data.settings.aiModel,
+        locale,
+        tasks: openTasks.slice(0, 100).map((task) => ({
+          title: task.title,
+          dueDate: task.dueDate,
+          priority: task.priority,
+          project: projectById.get(task.projectId)?.title ?? null,
+        })),
+      });
+      setBriefing(text);
+    } catch (error) {
+      setBriefingError(readErrorMessage(error, t));
+    } finally {
+      setIsBriefingLoading(false);
+    }
   }
 
   if (authStatus === "loading") {
@@ -1011,6 +1062,7 @@ export function RoteAgendaApp() {
           editingSuggestionId={editingSuggestionId}
           modelLabel={getAiModelLabel(data.settings.aiModel)}
           error={captureError}
+          notice={captureNotice}
           isProcessing={isProcessingNote}
           locale={locale}
           t={t}
@@ -1144,6 +1196,9 @@ export function RoteAgendaApp() {
         projects={projectById}
         filter={taskFilter}
         aiStats={buildAiStats(data)}
+        briefing={briefing}
+        briefingError={briefingError}
+        isBriefingLoading={isBriefingLoading}
         locale={locale}
         t={t}
         onFilterChange={setTaskFilter}
@@ -1154,6 +1209,8 @@ export function RoteAgendaApp() {
         onOpenInbox={() => navigate("inbox")}
         onOpenMore={() => navigate("more")}
         onOpenSearch={() => navigate("search")}
+        onGenerateBriefing={() => void handleGenerateBriefing()}
+        onDismissBriefing={() => setBriefing(null)}
       />
     );
   })();

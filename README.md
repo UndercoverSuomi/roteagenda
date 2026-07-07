@@ -7,8 +7,9 @@ Die Oberflaeche ist zuerst als responsives Webtool gedacht: schnell am Handy erf
 ## Kernflow
 
 - Registrieren oder anmelden (inkl. Passwort-zuruecksetzen per E-Mail)
-- Notiz schnell erfassen — getippt oder per Mikrofon eingesprochen (Aufnahme wird serverseitig ueber ein audiofaehiges OpenRouter-Modell transkribiert, Standard `google/gemini-2.5-flash`, Override via `OPENROUTER_TRANSCRIBE_MODEL`)
-- KI verarbeitet und klassifiziert die Rohnotiz (mit aktuellem Datum als Referenz, auf Deutsch oder Englisch)
+- Notiz schnell erfassen — getippt, per Mikrofon eingesprochen (Transkription ueber ein audiofaehiges OpenRouter-Modell, Standard `google/gemini-2.5-flash`, Override via `OPENROUTER_TRANSCRIBE_MODEL`) oder als Foto eines Notizzettels (OCR ueber ein bildfaehiges Modell, Override via `OPENROUTER_VISION_MODEL`)
+- KI verarbeitet und klassifiziert die Rohnotiz (mit aktuellem Datum als Referenz, auf Deutsch oder Englisch); sie kennt dabei Projekte und offene Aufgaben und schlaegt keine Duplikate vor
+- Tagesbriefing auf dem Heute-Screen: die KI fasst Ueberfaelliges und heute Faelliges kurz zusammen
 - Vorschlag pruefen, bearbeiten, uebernehmen oder ignorieren
 - Aufgabe erscheint im passenden Projekt und auf dem Heute-Dashboard
 - Aufgaben abhaken, bearbeiten, per Schnellauswahl verschieben (heute/morgen/naechste Woche), Projekte anlegen und verwalten
@@ -93,7 +94,7 @@ MINIMAX_API_KEY=...
 DEEPSEEK_API_KEY=...
 ```
 
-Optionale Overrides fuer Base-URLs und Modell-Slugs stehen in [.env.example](.env.example). Die Route `/api/ai/process-note` verlangt eine gueltige Appwrite-Session (JWT), begrenzt Notizen auf 4000 Zeichen und drosselt auf 20 Anfragen pro Nutzer und 10 Minuten.
+Optionale Overrides fuer Base-URLs und Modell-Slugs stehen in [.env.example](.env.example). Die Route `/api/ai/process-note` verlangt eine gueltige Appwrite-Session (JWT), begrenzt Notizen auf 4000 Zeichen und drosselt auf 20 Anfragen pro Nutzer und 10 Minuten. Auch `/api/ai/transcribe`, `/api/ai/extract-image` und `/api/ai/daily-briefing` verlangen eine gueltige Session und sind pro Nutzer gedrosselt.
 
 ### 3. Entwicklung
 

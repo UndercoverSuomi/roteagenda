@@ -117,6 +117,13 @@ const messages = {
   "today.openSearch": { de: "Suche öffnen", en: "Open search" },
   "today.capturePrompt": { de: "Was beschäftigt dich?", en: "What's on your mind?" },
   "today.aiUpdate": { de: "KI-Update", en: "AI update" },
+  "briefing.title": { de: "Tagesbriefing", en: "Daily briefing" },
+  "briefing.generate": { de: "Briefing erstellen", en: "Create briefing" },
+  "briefing.loading": { de: "Briefing wird erstellt...", en: "Creating briefing..." },
+  "briefing.empty": {
+    de: "Keine offenen Aufgaben – alles erledigt.",
+    en: "No open tasks – all clear.",
+  },
   "today.notesProcessed.one": { de: "{count} Notiz verarbeitet", en: "{count} note processed" },
   "today.notesProcessed.many": { de: "{count} Notizen verarbeitet", en: "{count} notes processed" },
   "today.accepted": { de: "{count} übernommen", en: "{count} accepted" },
@@ -169,6 +176,22 @@ const messages = {
   "capture.mic.error": {
     de: "Die Spracheingabe hat nicht geklappt. Versuche es erneut.",
     en: "Speech input failed. Please try again.",
+  },
+  "capture.photo.start": {
+    de: "Notizzettel fotografieren",
+    en: "Scan a note photo",
+  },
+  "capture.photo.processing": {
+    de: "Foto wird gelesen...",
+    en: "Reading photo...",
+  },
+  "capture.photo.error": {
+    de: "Das Foto konnte nicht gelesen werden. Versuche es erneut.",
+    en: "The photo could not be read. Please try again.",
+  },
+  "capture.noNewTasks": {
+    de: "Keine neuen Aufgaben erkannt – alles aus der Notiz existiert bereits als offene Aufgabe.",
+    en: "No new tasks detected – everything in the note already exists as an open task.",
   },
 
   // Inbox

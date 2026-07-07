@@ -34,6 +34,14 @@ export type AiProcessingResult = {
   suggestions: AiSuggestion[];
 };
 
+// Kontext über bereits vorhandene offene Aufgaben, damit die KI keine
+// Duplikate vorschlägt.
+export type OpenTaskContext = {
+  title: string;
+  projectId: string | null;
+  dueDate: string | null;
+};
+
 type BuildProcessingResultParams = {
   note: string;
   providerText: string;
@@ -45,6 +53,7 @@ type CallAiProviderParams = {
   config: ResolvedAiModelConfig;
   note: string;
   projects: Pick<Project, "id" | "title" | "description" | "keywords" | "aiEnabled">[];
+  openTasks?: OpenTaskContext[];
   today?: string;
   locale?: Locale;
   fetchFn?: typeof fetch;
@@ -192,12 +201,31 @@ export function resolveAiModelConfig(modelId: string, env: Env = process.env): R
   };
 }
 
+// Toleranter JSON-Parser: manche Modelle verpacken die Antwort in
+// Markdown-Zäune oder umgeben sie mit Erklärtext.
 export function parseProviderJson(value: string): unknown {
-  try {
-    return JSON.parse(value);
-  } catch {
-    throw new Error("KI-Antwort konnte nicht als JSON gelesen werden.");
+  const attempts: string[] = [value];
+
+  const fenced = value.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+  if (fenced?.[1]) {
+    attempts.push(fenced[1]);
   }
+
+  const start = value.indexOf("{");
+  const end = value.lastIndexOf("}");
+  if (start !== -1 && end > start) {
+    attempts.push(value.slice(start, end + 1));
+  }
+
+  for (const attempt of attempts) {
+    try {
+      return JSON.parse(attempt);
+    } catch {
+      // Nächsten Kandidaten versuchen.
+    }
+  }
+
+  throw new Error("KI-Antwort konnte nicht als JSON gelesen werden.");
 }
 
 export function extractProviderText(payload: unknown): string {
@@ -218,22 +246,107 @@ export function extractProviderText(payload: unknown): string {
   throw new Error("KI-Anbieter hat keinen Textinhalt zurückgegeben.");
 }
 
+type ProviderMessages = { system?: string; user: string };
+type ProviderRequestOptions = { maxTokens: number; json: boolean };
+
+// Gemeinsamer Provider-Aufruf für Notiz-Verarbeitung und Briefing.
+async function requestProvider(
+  config: ResolvedAiModelConfig,
+  messages: ProviderMessages,
+  options: ProviderRequestOptions,
+  fetchFn: typeof fetch,
+) {
+  if (config.provider === "openai-responses") {
+    const input = messages.system
+      ? `${messages.system}\n\n${messages.user}`
+      : messages.user;
+
+    return fetchFn("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: providerHeaders(config.apiKey),
+      body: JSON.stringify({
+        model: config.model,
+        input: [
+          {
+            role: "user",
+            content: input,
+          },
+        ],
+        max_output_tokens: options.maxTokens,
+        ...(options.json ? { text: { format: { type: "json_object" } } } : {}),
+      }),
+    });
+  }
+
+  if (!config.baseUrl) {
+    throw new Error(`${config.label} ist ohne Base URL konfiguriert.`);
+  }
+
+  const chatMessages: Array<{ role: string; content: string }> = [];
+  if (messages.system) {
+    chatMessages.push({ role: "system", content: messages.system });
+  }
+  chatMessages.push({ role: "user", content: messages.user });
+
+  return fetchFn(joinUrl(config.baseUrl, "chat/completions"), {
+    method: "POST",
+    headers: providerHeaders(config.apiKey),
+    body: JSON.stringify({
+      model: config.model,
+      messages: chatMessages,
+      max_tokens: options.maxTokens,
+      ...(options.json ? { response_format: { type: "json_object" } } : {}),
+    }),
+  });
+}
+
 export async function callAiProvider({
   config,
   note,
   projects,
+  openTasks = [],
   today,
   locale = "de",
   fetchFn = fetch,
 }: CallAiProviderParams): Promise<string> {
-  const prompt = buildPrompt(note, projects, today, locale);
-  const response =
-    config.provider === "openai-responses"
-      ? await callOpenAiResponses(config, prompt, fetchFn)
-      : await callChatCompletions(config, prompt, locale, fetchFn);
+  const prompt = buildPrompt(note, projects, openTasks, today, locale);
+  const system =
+    locale === "en"
+      ? "You extract tasks from raw notes and respond exclusively with JSON."
+      : "Du extrahierst Aufgaben aus Rohnotizen und antwortest ausschließlich mit JSON.";
+
+  const response = await requestProvider(
+    config,
+    { system, user: prompt },
+    { maxTokens: 1800, json: true },
+    fetchFn,
+  );
 
   const payload = await readJsonResponse(response, config.label);
   return extractProviderText(payload);
+}
+
+// Kompletter Verarbeitungslauf mit einem Wiederholungsversuch, falls die
+// Antwort kein brauchbares JSON war. Provider-/HTTP-Fehler werden nicht
+// wiederholt, sondern direkt gemeldet.
+export async function processNoteWithProvider(
+  params: CallAiProviderParams,
+): Promise<AiProcessingResult> {
+  let lastError: unknown;
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const providerText = await callAiProvider(params);
+      return buildProcessingResultFromProviderText({ note: params.note, providerText });
+    } catch (error) {
+      lastError = error;
+      const retryable =
+        error instanceof Error && error.message.startsWith("KI-Antwort");
+      if (!retryable) throw error;
+    }
+  }
+
+  throw lastError;
 }
 
 export function buildProcessingResultFromProviderText({
@@ -264,10 +377,8 @@ function readSuggestionsPayload(payload: unknown): Record<string, unknown>[] {
     throw new Error("KI-Antwort enthält keine gültige suggestions-Liste.");
   }
 
-  if (payload.suggestions.length === 0) {
-    throw new Error("KI-Antwort enthält keine Vorschläge.");
-  }
-
+  // Eine leere Liste ist gültig: Die Notiz beschreibt nur bereits
+  // vorhandene Aufgaben.
   return payload.suggestions.map((item) => {
     if (!isRecord(item)) {
       throw new Error("KI-Antwort enthält einen ungültigen Vorschlag.");
@@ -379,9 +490,22 @@ function describeToday(todayIso: string | undefined, locale: Locale) {
 const JSON_SHAPE =
   '{"suggestions":[{"suggestedTitle":"...","suggestedDescription":"...","suggestedProjectId":"project-id | null","suggestedNewProjectTitle":"... | null","confidence":0.0,"priority":"low|medium|high","dueDate":"YYYY-MM-DD | null","reasoning":"...","needsReview":true}]}';
 
+// Obergrenzen, damit der Prompt bei großen Datenmengen kompakt bleibt.
+const MAX_PROMPT_TASKS = 120;
+const MAX_PROMPT_TASK_TITLE = 120;
+
+function compactOpenTasks(openTasks: OpenTaskContext[]) {
+  return openTasks.slice(0, MAX_PROMPT_TASKS).map((task) => ({
+    title: task.title.slice(0, MAX_PROMPT_TASK_TITLE),
+    projectId: task.projectId,
+    dueDate: task.dueDate,
+  }));
+}
+
 function buildPrompt(
   note: string,
   projects: Pick<Project, "id" | "title" | "description" | "keywords" | "aiEnabled">[],
+  openTasks: OpenTaskContext[],
   today: string | undefined,
   locale: Locale,
 ) {
@@ -393,6 +517,7 @@ function buildPrompt(
       description: project.description,
       keywords: project.keywords,
     }));
+  const existingTasks = compactOpenTasks(openTasks);
 
   if (locale === "en") {
     return [
@@ -406,6 +531,14 @@ function buildPrompt(
       "Convert relative expressions like today, tomorrow, Friday or next week into a concrete dueDate based on today's date.",
       "Set dueDate to null if no deadline is recognizable.",
       "Write suggestedTitle, suggestedDescription and reasoning in English.",
+      ...(existingTasks.length
+        ? [
+            "Existing open tasks (JSON):",
+            JSON.stringify(existingTasks),
+            "Do not suggest anything that already exists in this list.",
+            "If the note only describes tasks that already exist, return an empty suggestions list.",
+          ]
+        : []),
       "Enabled projects:",
       JSON.stringify(enabledProjects),
       "Raw note:",
@@ -424,65 +557,19 @@ function buildPrompt(
     "Rechne relative Angaben wie heute, morgen, Freitag oder nächste Woche vom heutigen Datum aus in ein konkretes dueDate um.",
     "Setze dueDate auf null, wenn keine Deadline erkennbar ist.",
     "Formuliere suggestedTitle, suggestedDescription und reasoning auf Deutsch.",
+    ...(existingTasks.length
+      ? [
+          "Bereits vorhandene offene Aufgaben (JSON):",
+          JSON.stringify(existingTasks),
+          "Schlage nichts vor, was inhaltlich bereits in dieser Liste existiert.",
+          "Beschreibt die Notiz nur bereits vorhandene Aufgaben, gib eine leere suggestions-Liste zurück.",
+        ]
+      : []),
     "Aktivierte Projekte:",
     JSON.stringify(enabledProjects),
     "Rohnotiz:",
     note,
   ].join("\n");
-}
-
-async function callOpenAiResponses(
-  config: ResolvedAiModelConfig,
-  prompt: string,
-  fetchFn: typeof fetch,
-) {
-  return fetchFn("https://api.openai.com/v1/responses", {
-    method: "POST",
-    headers: providerHeaders(config.apiKey),
-    body: JSON.stringify({
-      model: config.model,
-      input: [
-        {
-          role: "user",
-          content: prompt,
-        },
-      ],
-      max_output_tokens: 1800,
-    }),
-  });
-}
-
-async function callChatCompletions(
-  config: ResolvedAiModelConfig,
-  prompt: string,
-  locale: Locale,
-  fetchFn: typeof fetch,
-) {
-  if (!config.baseUrl) {
-    throw new Error(`${config.label} ist ohne Base URL konfiguriert.`);
-  }
-
-  return fetchFn(joinUrl(config.baseUrl, "chat/completions"), {
-    method: "POST",
-    headers: providerHeaders(config.apiKey),
-    body: JSON.stringify({
-      model: config.model,
-      messages: [
-        {
-          role: "system",
-          content:
-            locale === "en"
-              ? "You extract tasks from raw notes and respond exclusively with JSON."
-              : "Du extrahierst Aufgaben aus Rohnotizen und antwortest ausschließlich mit JSON.",
-        },
-        {
-          role: "user",
-          content: prompt,
-        },
-      ],
-      max_tokens: 1800,
-    }),
-  });
 }
 
 function providerHeaders(apiKey: string) {
@@ -580,9 +667,10 @@ function createId(prefix: string) {
     .slice(2, 8)}`;
 }
 
-// ── Sprachnotiz-Transkription über OpenRouter ───────────────────────
+// ── Medien über OpenRouter (Sprachnotiz + Foto-Notiz) ───────────────
 
 const DEFAULT_TRANSCRIBE_MODEL = "google/gemini-2.5-flash";
+const DEFAULT_VISION_MODEL = "google/gemini-2.5-flash";
 
 type TranscribeParams = {
   audioBase64: string;
@@ -592,29 +680,57 @@ type TranscribeParams = {
   fetchFn?: typeof fetch;
 };
 
-type TranscribeResolveResult =
+type ExtractImageParams = {
+  imageBase64: string;
+  locale?: Locale;
+  env?: Env;
+  fetchFn?: typeof fetch;
+};
+
+type MediaResolveResult =
   | { ok: true; apiKey: string; model: string; baseUrl: string }
   | { ok: false; error: string; status: number };
 
-export function resolveTranscriptionConfig(
-  env: Env = process.env,
-): TranscribeResolveResult {
+function resolveOpenRouterMedia(
+  env: Env,
+  modelEnvName: string,
+  defaultModel: string,
+  purpose: string,
+): MediaResolveResult {
   const apiKey = env[OPENROUTER_KEY_ENV]?.trim();
 
   if (!apiKey) {
     return {
       ok: false,
       status: 503,
-      error: `Die Sprachtranskription benötigt ${OPENROUTER_KEY_ENV}. Bitte setze die Environment Variable in Appwrite/Next.`,
+      error: `${purpose} benötigt ${OPENROUTER_KEY_ENV}. Bitte setze die Environment Variable in Appwrite/Next.`,
     };
   }
 
   return {
     ok: true,
     apiKey,
-    model: env.OPENROUTER_TRANSCRIBE_MODEL?.trim() || DEFAULT_TRANSCRIBE_MODEL,
+    model: env[modelEnvName]?.trim() || defaultModel,
     baseUrl: env[OPENROUTER_BASE_URL_ENV]?.trim() || DEFAULT_OPENROUTER_BASE_URL,
   };
+}
+
+export function resolveTranscriptionConfig(env: Env = process.env): MediaResolveResult {
+  return resolveOpenRouterMedia(
+    env,
+    "OPENROUTER_TRANSCRIBE_MODEL",
+    DEFAULT_TRANSCRIBE_MODEL,
+    "Die Sprachtranskription",
+  );
+}
+
+export function resolveVisionConfig(env: Env = process.env): MediaResolveResult {
+  return resolveOpenRouterMedia(
+    env,
+    "OPENROUTER_VISION_MODEL",
+    DEFAULT_VISION_MODEL,
+    "Die Foto-Erkennung",
+  );
 }
 
 export async function transcribeAudio({
@@ -663,4 +779,123 @@ export async function transcribeAudio({
   }
 
   return text;
+}
+
+export async function extractImageText({
+  imageBase64,
+  locale = "de",
+  env = process.env,
+  fetchFn = fetch,
+}: ExtractImageParams): Promise<string> {
+  const config = resolveVisionConfig(env);
+  if (!config.ok) {
+    throw new Error(config.error);
+  }
+
+  const instruction =
+    locale === "en"
+      ? "Read this photo of a note (sticky note, whiteboard, notebook page) and extract the text it contains as a compact note. Put each task-like item on its own line. Return only the extracted text, without comments."
+      : "Lies dieses Foto einer Notiz (Zettel, Whiteboard, Notizbuchseite) und extrahiere den enthaltenen Text als kompakte Notiz. Setze jeden aufgabenähnlichen Punkt in eine eigene Zeile. Gib ausschließlich den extrahierten Text zurück, ohne Kommentare.";
+
+  const response = await fetchFn(joinUrl(config.baseUrl, "chat/completions"), {
+    method: "POST",
+    headers: providerHeaders(config.apiKey),
+    body: JSON.stringify({
+      model: config.model,
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: instruction },
+            {
+              type: "image_url",
+              image_url: { url: `data:image/jpeg;base64,${imageBase64}` },
+            },
+          ],
+        },
+      ],
+      max_tokens: 1500,
+    }),
+  });
+
+  const payload = await readJsonResponse(response, "Foto-Erkennung");
+  const text = extractProviderText(payload).trim();
+
+  if (!text) {
+    throw new Error("Auf dem Foto wurde kein Text erkannt.");
+  }
+
+  return text;
+}
+
+// ── Tagesbriefing ────────────────────────────────────────────────────
+
+export type BriefingTask = {
+  title: string;
+  dueDate: string | null;
+  priority: TaskPriority;
+  project: string | null;
+};
+
+type BriefingParams = {
+  config: ResolvedAiModelConfig;
+  tasks: BriefingTask[];
+  today?: string;
+  locale?: Locale;
+  fetchFn?: typeof fetch;
+};
+
+const MAX_BRIEFING_TASKS = 100;
+
+function buildBriefingPrompt(tasks: BriefingTask[], today: string | undefined, locale: Locale) {
+  const compact = tasks.slice(0, MAX_BRIEFING_TASKS).map((task) => ({
+    title: task.title.slice(0, MAX_PROMPT_TASK_TITLE),
+    dueDate: task.dueDate,
+    priority: task.priority,
+    project: task.project,
+  }));
+
+  if (locale === "en") {
+    return [
+      `Today is ${describeToday(today, "en")}.`,
+      "Create a short daily briefing from the open tasks below: overdue items first, then what is due today, then at most three other important points.",
+      "At most 120 words, no heading. Address the user directly.",
+      "Open tasks (JSON):",
+      JSON.stringify(compact),
+      "Respond in English with the briefing text only.",
+    ].join("\n");
+  }
+
+  return [
+    `Heute ist ${describeToday(today, "de")}.`,
+    "Erstelle aus den offenen Aufgaben unten ein kurzes Tagesbriefing: zuerst Überfälliges, dann heute Fälliges, dann höchstens drei weitere wichtige Punkte.",
+    "Maximal 120 Wörter, keine Überschrift. Sprich die Nutzerin/den Nutzer direkt in Du-Form an.",
+    "Offene Aufgaben (JSON):",
+    JSON.stringify(compact),
+    "Antworte auf Deutsch nur mit dem Briefing-Text.",
+  ].join("\n");
+}
+
+export async function generateDailyBriefing({
+  config,
+  tasks,
+  today,
+  locale = "de",
+  fetchFn = fetch,
+}: BriefingParams): Promise<string> {
+  const prompt = buildBriefingPrompt(tasks, today, locale);
+  const system =
+    locale === "en"
+      ? "You are the daily assistant of Rote Agenda. You answer with a short, friendly briefing in plain text."
+      : "Du bist der Tagesassistent von Rote Agenda. Du antwortest mit einem kurzen, freundlichen Briefing als Fließtext.";
+
+  const response = await requestProvider(
+    config,
+    { system, user: prompt },
+    { maxTokens: 400, json: false },
+    fetchFn,
+  );
+
+  const payload = await readJsonResponse(response, config.label);
+  return extractProviderText(payload).trim();
 }

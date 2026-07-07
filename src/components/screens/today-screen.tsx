@@ -1,6 +1,6 @@
 "use client";
 
-import { Bell, ChevronRight, Menu, Plus, Search, Sparkles } from "lucide-react";
+import { Bell, ChevronRight, Loader2, Menu, Plus, Search, Sparkles, Sunrise, X } from "lucide-react";
 import { useMemo } from "react";
 import type { AiStats, TaskFilter } from "@/components/app-types";
 import { TaskTabs } from "@/components/ui/controls";
@@ -16,6 +16,9 @@ export function TodayScreen({
   projects,
   filter,
   aiStats,
+  briefing,
+  briefingError,
+  isBriefingLoading,
   locale,
   t,
   onFilterChange,
@@ -26,11 +29,16 @@ export function TodayScreen({
   onOpenInbox,
   onOpenMore,
   onOpenSearch,
+  onGenerateBriefing,
+  onDismissBriefing,
 }: {
   tasks: Task[];
   projects: Map<string, Project>;
   filter: TaskFilter;
   aiStats: AiStats;
+  briefing: string | null;
+  briefingError: string | null;
+  isBriefingLoading: boolean;
   locale: Locale;
   t: Translator;
   onFilterChange: (filter: TaskFilter) => void;
@@ -41,6 +49,8 @@ export function TodayScreen({
   onOpenInbox: () => void;
   onOpenMore: () => void;
   onOpenSearch: () => void;
+  onGenerateBriefing: () => void;
+  onDismissBriefing: () => void;
 }) {
   const isBrandNew = !tasks.length && !aiStats.processedNotes && filter === "all";
 
@@ -127,6 +137,51 @@ export function TodayScreen({
             <span>{t("today.toReview", { count: aiStats.pendingCount })}</span>
           </div>
         </button>
+      ) : null}
+
+      {!isBrandNew ? (
+        <section className="mt-5 rounded-[5px] border border-[var(--line)] bg-[var(--surface)] p-4 shadow-sm">
+          <div className="flex items-center justify-between gap-4">
+            <div className="flex items-center gap-2 text-[11px] font-extrabold uppercase tracking-[0.03em]">
+              <Sunrise className="h-4 w-4 text-[var(--green)]" />
+              {t("briefing.title")}
+            </div>
+            {briefing ? (
+              <button
+                type="button"
+                onClick={onDismissBriefing}
+                aria-label={t("common.close")}
+                className="grid h-8 w-8 place-items-center text-[var(--muted)]"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            ) : null}
+          </div>
+          {briefing ? (
+            <p className="mt-3 whitespace-pre-line text-[13px] leading-6 text-[var(--ink-soft)]">
+              {briefing}
+            </p>
+          ) : (
+            <button
+              type="button"
+              onClick={onGenerateBriefing}
+              disabled={isBriefingLoading}
+              className="mt-3 flex items-center gap-2 rounded-[5px] border border-[var(--line-strong)] px-4 py-2.5 text-[12px] font-bold disabled:opacity-50"
+            >
+              {isBriefingLoading ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Sparkles className="h-4 w-4" />
+              )}
+              {isBriefingLoading ? t("briefing.loading") : t("briefing.generate")}
+            </button>
+          )}
+          {briefingError ? (
+            <p className="mt-3 rounded-[5px] border border-[var(--red)] bg-[var(--surface-strong)] p-3 text-[12px] leading-5 text-[var(--red)]">
+              {briefingError}
+            </p>
+          ) : null}
+        </section>
       ) : null}
 
       <div className="mt-9 flex items-end justify-between">
