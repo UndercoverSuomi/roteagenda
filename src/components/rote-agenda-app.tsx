@@ -41,11 +41,13 @@ import { createEmptyAppData } from "@/lib/app-data";
 import { buildAppUrl, parseAppUrl } from "@/lib/app-url";
 import { account, client } from "@/lib/appwrite";
 import {
-  deleteAllUserData,
-  deleteItem,
+  APPWRITE_COLLECTIONS,
+  APPWRITE_DATABASE_ID,
+} from "@/lib/appwrite-config";
+import {
+  executeSyncOp,
   loadAppDataForUser,
-  saveSettings,
-  upsertItem,
+  type SyncOp,
 } from "@/lib/appwrite-store";
 import { toIsoDate } from "@/lib/date";
 import {
@@ -55,7 +57,17 @@ import {
   type Locale,
   type Translator,
 } from "@/lib/i18n";
+import {
+  clearCachedAppData,
+  clearQueuedOps,
+  isNetworkError,
+  readCachedAppData,
+  readQueuedOps,
+  writeCachedAppData,
+  writeQueuedOps,
+} from "@/lib/offline-store";
 import { pickProjectColor } from "@/lib/project-colors";
+import { applyRealtimeEvent } from "@/lib/realtime";
 import { createSyncQueue, type SyncFailure, type SyncStatus } from "@/lib/sync-queue";
 import {
   applyTheme,
@@ -108,6 +120,14 @@ export function RoteAgendaApp() {
   const [dataError, setDataError] = useState<string | null>(null);
   const [syncStatus, setSyncStatus] = useState<SyncStatus>("idle");
   const [syncFailure, setSyncFailure] = useState<SyncFailure | null>(null);
+  const [pendingCount, setPendingCount] = useState(0);
+  // Initialwert direkt vom Browser; die Lade-Shell rendert nichts davon,
+  // daher bleibt die Hydration identisch zum Server-HTML.
+  const [isOnline, setIsOnline] = useState(() =>
+    typeof navigator === "undefined" ? true : navigator.onLine,
+  );
+  // Kennzeichnet, dass die Daten aus dem lokalen Cache statt von Appwrite kommen.
+  const [usedCachedData, setUsedCachedData] = useState(false);
   const [screen, setScreen] = useState<Screen>(() => readInitialLocation().screen);
   const [taskFilter, setTaskFilter] = useState<TaskFilter>("all");
   const [projectTab, setProjectTab] = useState<ProjectDetailTab>("tasks");
@@ -126,6 +146,9 @@ export function RoteAgendaApp() {
   const [editingSuggestionId, setEditingSuggestionId] = useState<string | null>(null);
   const [undo, setUndo] = useState<UndoState | null>(null);
   const undoTimerRef = useRef<number | null>(null);
+  const userIdRef = useRef("");
+  const dataStatusRef = useRef<DataStatus>("idle");
+  const queueHydratedRef = useRef(false);
   const [locale, setLocale] = useState<Locale>("de");
   // Theme beeinflusst kein Server-HTML (nur MoreScreen-Select + Effekt),
   // daher ist die direkte Initialisierung hydration-sicher.
@@ -138,9 +161,18 @@ export function RoteAgendaApp() {
 
   const syncQueue = useMemo(
     () =>
-      createSyncQueue((status, failure) => {
-        setSyncStatus(status);
-        setSyncFailure(failure);
+      createSyncQueue<SyncOp>({
+        execute: (op) => executeSyncOp(op, userIdRef.current),
+        save: (entries) => {
+          if (userIdRef.current) {
+            writeQueuedOps(userIdRef.current, entries);
+          }
+        },
+        onChange: (status, failure, pending) => {
+          setSyncStatus(status);
+          setSyncFailure(failure);
+          setPendingCount(pending);
+        },
       }),
     [],
   );
@@ -148,6 +180,10 @@ export function RoteAgendaApp() {
   useEffect(() => {
     document.documentElement.lang = locale;
   }, [locale]);
+
+  useEffect(() => {
+    dataStatusRef.current = dataStatus;
+  }, [dataStatus]);
 
   useEffect(() => {
     applyTheme(themePref);
@@ -175,6 +211,66 @@ export function RoteAgendaApp() {
     return () => window.removeEventListener("popstate", onPopState);
   }, []);
 
+  // Service Worker macht die App-Shell offline verfügbar (nur Produktion,
+  // damit der Cache nicht mit dem Dev-Server kollidiert).
+  useEffect(() => {
+    if (process.env.NODE_ENV !== "production") return;
+    if (!("serviceWorker" in navigator)) return;
+    void navigator.serviceWorker.register("/sw.js").catch(() => undefined);
+  }, []);
+
+  // Online/Offline beobachten; beim Reconnect Queue flushen und Daten auffrischen.
+  useEffect(() => {
+    const goOnline = () => {
+      setIsOnline(true);
+      void handleReconnect();
+    };
+    const goOffline = () => setIsOnline(false);
+
+    window.addEventListener("online", goOnline);
+    window.addEventListener("offline", goOffline);
+    return () => {
+      window.removeEventListener("online", goOnline);
+      window.removeEventListener("offline", goOffline);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authStatus, authUser]);
+
+  // Appwrite Realtime hält andere Geräte und Tabs synchron.
+  useEffect(() => {
+    if (dataStatus !== "ready" || !authUser) return;
+
+    const channels = Object.values(APPWRITE_COLLECTIONS).map(
+      (collectionId) =>
+        `databases.${APPWRITE_DATABASE_ID}.collections.${collectionId}.documents`,
+    );
+
+    let unsubscribe: (() => void) | undefined;
+    try {
+      unsubscribe = client.subscribe<Record<string, unknown>>(channels, (message) => {
+        setData((current) => applyRealtimeEvent(current, message.events, message.payload));
+      });
+    } catch {
+      unsubscribe = undefined;
+    }
+
+    return () => {
+      try {
+        unsubscribe?.();
+      } catch {
+        // Socket ist bereits geschlossen.
+      }
+    };
+  }, [dataStatus, authUser]);
+
+  // Jeder Datenstand wird lokal gespiegelt, damit die App offline starten kann.
+  useEffect(() => {
+    if (dataStatus !== "ready") return;
+    const uid = authUser?.$id || data.user.id;
+    if (!uid) return;
+    writeCachedAppData(uid, data);
+  }, [data, dataStatus, authUser]);
+
   useEffect(() => {
     let isActive = true;
 
@@ -190,13 +286,23 @@ export function RoteAgendaApp() {
       try {
         const user = await account.get();
         if (!isActive) return;
-
-        setAuthUser(user);
-        setAuthStatus("signedIn");
-        setDataStatus("loading");
-        await loadRemoteData(user);
-      } catch {
+        await completeSignIn(user);
+      } catch (error) {
         if (!isActive) return;
+
+        // Offline mit vorhandenem Cache: letzten Stand zeigen statt Login.
+        const cached = readCachedAppData();
+        if (isNetworkError(error) && cached) {
+          userIdRef.current = cached.userId;
+          hydrateQueueForUser(cached.userId);
+          setData(cached.data);
+          setLocale(cached.data.settings.locale);
+          setUsedCachedData(true);
+          setAuthStatus("signedIn");
+          setDataStatus("ready");
+          return;
+        }
+
         setAuthStatus("signedOut");
         setDataStatus("idle");
       }
@@ -210,6 +316,54 @@ export function RoteAgendaApp() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Lädt die Queue einer früheren Sitzung — aber nur für denselben Nutzer.
+  function hydrateQueueForUser(uid: string) {
+    if (queueHydratedRef.current) return;
+    queueHydratedRef.current = true;
+
+    const stored = readQueuedOps();
+    if (!stored) return;
+    if (stored.userId !== uid) {
+      clearQueuedOps();
+      clearCachedAppData();
+      return;
+    }
+    if (stored.entries.length) {
+      syncQueue.hydrate(stored.entries);
+    }
+  }
+
+  async function completeSignIn(user: Models.User<Models.Preferences>) {
+    setAuthUser(user);
+    userIdRef.current = user.$id;
+    setAuthStatus("signedIn");
+    setDataStatus("loading");
+    hydrateQueueForUser(user.$id);
+    // Erst liegengebliebene Änderungen anwenden, dann frisch laden.
+    await syncQueue.flush();
+    await loadRemoteData(user);
+  }
+
+  // Nach einem Verbindungsabbruch: Session prüfen, Queue flushen, neu laden.
+  async function handleReconnect() {
+    if (authStatus !== "signedIn") return;
+
+    try {
+      const user = authUser ?? (await account.get());
+      if (!authUser) {
+        setAuthUser(user);
+        userIdRef.current = user.$id;
+      }
+      await syncQueue.flush();
+      await loadRemoteData(user);
+    } catch (error) {
+      // Session abgelaufen (kein Netzfehler): sauber abmelden.
+      if (!isNetworkError(error)) {
+        await handleLogout();
+      }
+    }
+  }
+
   async function loadRemoteData(user: Models.User<Models.Preferences>) {
     try {
       const remoteData = await loadAppDataForUser(user, detectDeviceLocale());
@@ -217,21 +371,28 @@ export function RoteAgendaApp() {
       setLocale(remoteData.settings.locale);
       storeDeviceLocale(remoteData.settings.locale);
       setDataError(null);
+      setUsedCachedData(false);
       setDataStatus("ready");
     } catch (error) {
+      // Fehlgeschlagener Refresh nach erfolgreichem Start: alten Stand behalten.
+      if (dataStatusRef.current === "ready") return;
       setDataError(readErrorMessage(error, t));
       setDataStatus("error");
     }
   }
 
-  // Jede Änderung wird sofort optimistisch angezeigt und in der Queue
-  // nacheinander nach Appwrite geschrieben.
-  function persist(label: string, job: () => Promise<void>) {
+  // Jede Änderung wird sofort optimistisch angezeigt und als serialisierbare
+  // Operation in der Queue nach Appwrite geschrieben (überlebt Reloads).
+  function persist(label: string, op: SyncOp) {
     if (dataStatus !== "ready") return;
-    syncQueue.push(label, job);
+    syncQueue.push(label, op);
   }
 
-  const userId = authUser?.$id ?? "";
+  const userId = authUser?.$id || data.user.id;
+
+  useEffect(() => {
+    userIdRef.current = userId;
+  }, [userId]);
 
   const selectedProject = data.projects.find(
     (project) => project.id === selectedProjectId,
@@ -347,11 +508,17 @@ export function RoteAgendaApp() {
       }));
       setActiveSuggestions(result.suggestions);
       setCaptureText("");
-      persist(t("entity.rawNote"), () => upsertItem("rawNotes", result.rawNote, userId));
+      persist(t("entity.rawNote"), {
+        kind: "upsert",
+        collection: "rawNotes",
+        item: result.rawNote,
+      });
       for (const suggestion of result.suggestions) {
-        persist(t("entity.suggestion"), () =>
-          upsertItem("suggestions", suggestion, userId),
-        );
+        persist(t("entity.suggestion"), {
+          kind: "upsert",
+          collection: "suggestions",
+          item: suggestion,
+        });
       }
     } catch (error) {
       setCaptureError(readErrorMessage(error, t));
@@ -377,7 +544,11 @@ export function RoteAgendaApp() {
         suggestion.id === updated.id ? updated : suggestion,
       ),
     }));
-    persist(t("entity.suggestion"), () => upsertItem("suggestions", updated, userId));
+    persist(t("entity.suggestion"), {
+      kind: "upsert",
+      collection: "suggestions",
+      item: updated,
+    });
   }
 
   function acceptSuggestion(suggestion: AiSuggestion, createdBy: "ai" | "user" = "ai") {
@@ -439,13 +610,18 @@ export function RoteAgendaApp() {
     goTo("today", { projectId, taskId: task.id });
 
     if (newProject) {
-      const projectToSave = newProject;
-      persist(t("entity.projectNew"), () => upsertItem("projects", projectToSave, userId));
+      persist(t("entity.projectNew"), {
+        kind: "upsert",
+        collection: "projects",
+        item: newProject,
+      });
     }
-    persist(t("entity.task"), () => upsertItem("tasks", task, userId));
-    persist(t("entity.suggestion"), () =>
-      upsertItem("suggestions", acceptedSuggestion, userId),
-    );
+    persist(t("entity.task"), { kind: "upsert", collection: "tasks", item: task });
+    persist(t("entity.suggestion"), {
+      kind: "upsert",
+      collection: "suggestions",
+      item: acceptedSuggestion,
+    });
   }
 
   function rejectSuggestion(suggestionId: string) {
@@ -462,23 +638,11 @@ export function RoteAgendaApp() {
     setActiveSuggestions((current) =>
       current.map((suggestion) => (suggestion.id === suggestionId ? rejected : suggestion)),
     );
-    persist(t("entity.suggestion"), () => upsertItem("suggestions", rejected, userId));
-  }
-
-  function toggleTask(taskId: string) {
-    const target = data.tasks.find((task) => task.id === taskId);
-    if (!target) return;
-
-    const updated: Task = {
-      ...target,
-      status: target.status === "done" ? "open" : "done",
-      updatedAt: new Date().toISOString(),
-    };
-    setData((current) => ({
-      ...current,
-      tasks: current.tasks.map((task) => (task.id === taskId ? updated : task)),
-    }));
-    persist(t("entity.task"), () => upsertItem("tasks", updated, userId));
+    persist(t("entity.suggestion"), {
+      kind: "upsert",
+      collection: "suggestions",
+      item: rejected,
+    });
   }
 
   function updateStoredTask(updated: Task) {
@@ -486,7 +650,18 @@ export function RoteAgendaApp() {
       ...current,
       tasks: current.tasks.map((task) => (task.id === updated.id ? updated : task)),
     }));
-    persist(t("entity.task"), () => upsertItem("tasks", updated, userId));
+    persist(t("entity.task"), { kind: "upsert", collection: "tasks", item: updated });
+  }
+
+  function toggleTask(taskId: string) {
+    const target = data.tasks.find((task) => task.id === taskId);
+    if (!target) return;
+
+    updateStoredTask({
+      ...target,
+      status: target.status === "done" ? "open" : "done",
+      updatedAt: new Date().toISOString(),
+    });
   }
 
   function rescheduleTask(taskId: string, dueDate: string | null) {
@@ -520,7 +695,7 @@ export function RoteAgendaApp() {
     setSelectedTaskId(task.id);
     setSelectedProjectId(task.projectId);
     setEditingTask(null);
-    persist(t("entity.task"), () => upsertItem("tasks", task, userId));
+    persist(t("entity.task"), { kind: "upsert", collection: "tasks", item: task });
   }
 
   function restoreTasks(tasks: Task[]) {
@@ -529,7 +704,7 @@ export function RoteAgendaApp() {
       tasks: [...tasks, ...current.tasks],
     }));
     for (const task of tasks) {
-      persist(t("entity.task"), () => upsertItem("tasks", task, userId));
+      persist(t("entity.task"), { kind: "upsert", collection: "tasks", item: task });
     }
   }
 
@@ -539,9 +714,9 @@ export function RoteAgendaApp() {
       projects: [project, ...current.projects],
       tasks: [...tasks, ...current.tasks],
     }));
-    persist(t("entity.project"), () => upsertItem("projects", project, userId));
+    persist(t("entity.project"), { kind: "upsert", collection: "projects", item: project });
     for (const task of tasks) {
-      persist(t("entity.task"), () => upsertItem("tasks", task, userId));
+      persist(t("entity.task"), { kind: "upsert", collection: "tasks", item: task });
     }
   }
 
@@ -554,7 +729,7 @@ export function RoteAgendaApp() {
     }));
     setEditingTask(null);
     goTo("today", { replace: true });
-    persist(t("entity.taskDelete"), () => deleteItem("tasks", taskId));
+    persist(t("entity.taskDelete"), { kind: "delete", collection: "tasks", id: taskId });
 
     if (target) {
       showUndo(t("undo.taskDeleted"), () => restoreTasks([target]));
@@ -576,7 +751,7 @@ export function RoteAgendaApp() {
         project.id === projectId ? updated : project,
       ),
     }));
-    persist(t("entity.project"), () => upsertItem("projects", updated, userId));
+    persist(t("entity.project"), { kind: "upsert", collection: "projects", item: updated });
   }
 
   function saveProject(project: Project) {
@@ -591,7 +766,7 @@ export function RoteAgendaApp() {
     });
     setSelectedProjectId(project.id);
     setEditingProject(null);
-    persist(t("entity.project"), () => upsertItem("projects", project, userId));
+    persist(t("entity.project"), { kind: "upsert", collection: "projects", item: project });
   }
 
   function deleteProject(projectId: string) {
@@ -610,9 +785,13 @@ export function RoteAgendaApp() {
     });
 
     for (const task of projectTasks) {
-      persist(t("entity.taskDelete"), () => deleteItem("tasks", task.id));
+      persist(t("entity.taskDelete"), { kind: "delete", collection: "tasks", id: task.id });
     }
-    persist(t("entity.projectDelete"), () => deleteItem("projects", projectId));
+    persist(t("entity.projectDelete"), {
+      kind: "delete",
+      collection: "projects",
+      id: projectId,
+    });
 
     if (targetProject) {
       showUndo(t("undo.projectDeleted"), () =>
@@ -690,10 +869,7 @@ export function RoteAgendaApp() {
 
       await account.createEmailPasswordSession({ email, password });
       const user = await account.get();
-      setAuthUser(user);
-      setAuthStatus("signedIn");
-      setDataStatus("loading");
-      await loadRemoteData(user);
+      await completeSignIn(user);
     } catch (error) {
       setAuthError(readErrorMessage(error, t));
       setAuthStatus("signedOut");
@@ -709,6 +885,13 @@ export function RoteAgendaApp() {
       // The local UI should still leave the authenticated area if the session is already gone.
     }
 
+    // Lokale Spuren des Nutzers entfernen (Cache + Warteschlange).
+    syncQueue.clear();
+    clearQueuedOps();
+    clearCachedAppData();
+    queueHydratedRef.current = false;
+    userIdRef.current = "";
+
     setAuthUser(null);
     setAuthStatus("signedOut");
     setDataStatus("idle");
@@ -718,6 +901,7 @@ export function RoteAgendaApp() {
     setSelectedTaskId("");
     setSearchQuery("");
     setUndo(null);
+    setUsedCachedData(false);
     setScreen(hasSeenWelcome() ? "today" : "welcome");
     if (typeof window !== "undefined") {
       window.history.replaceState(null, "", "/");
@@ -733,7 +917,7 @@ export function RoteAgendaApp() {
     setActiveSuggestions([]);
     setUndo(null);
     goTo("today", { replace: true, projectId: "", taskId: "" });
-    persist(t("entity.deleteAll"), () => deleteAllUserData());
+    persist(t("entity.deleteAll"), { kind: "deleteAll" });
   }
 
   function handleAiModelChange(aiModel: AiModelId) {
@@ -742,7 +926,7 @@ export function RoteAgendaApp() {
       ...current,
       settings,
     }));
-    persist(t("entity.settings"), () => saveSettings(settings));
+    persist(t("entity.settings"), { kind: "saveSettings", settings });
   }
 
   function handleLocaleChange(nextLocale: Locale) {
@@ -752,7 +936,10 @@ export function RoteAgendaApp() {
     if (dataStatus === "ready") {
       const settings = { ...data.settings, locale: nextLocale };
       setData((current) => ({ ...current, settings }));
-      persist(translate(nextLocale, "entity.settings"), () => saveSettings(settings));
+      persist(translate(nextLocale, "entity.settings"), {
+        kind: "saveSettings",
+        settings,
+      });
     }
   }
 
@@ -940,6 +1127,7 @@ export function RoteAgendaApp() {
           locale={locale}
           themePref={themePref}
           syncStatus={syncStatus}
+          isOnline={isOnline}
           t={t}
           onAiModelChange={handleAiModelChange}
           onLocaleChange={handleLocaleChange}
@@ -992,18 +1180,41 @@ export function RoteAgendaApp() {
         ) : null}
 
         <WorkSurface hasBottomNav={screen !== "welcome"}>
-          {syncFailure ? (
+          {!isOnline ? (
+            <div className="mx-6 mt-4 rounded-[6px] border border-[var(--line-strong)] bg-[var(--surface-strong)] p-3 md:mx-8">
+              <p className="text-[12px] leading-5 text-[var(--ink-soft)]">
+                {pendingCount
+                  ? t(
+                      pendingCount === 1
+                        ? "sync.offlinePending.one"
+                        : "sync.offlinePending.many",
+                      { count: pendingCount },
+                    )
+                  : t("sync.offline")}
+                {usedCachedData ? ` ${t("sync.cachedNotice")}` : ""}
+              </p>
+            </div>
+          ) : syncFailure ? (
             <div className="mx-6 mt-4 flex items-start justify-between gap-3 rounded-[6px] border border-[var(--red)] bg-[var(--surface-strong)] p-3 md:mx-8">
               <p className="text-[12px] leading-5 text-[var(--red)]">
                 {t("sync.failed", { label: syncFailure.label, detail: syncFailure.detail })}
               </p>
-              <button
-                type="button"
-                onClick={() => syncQueue.retry()}
-                className="shrink-0 rounded-[4px] bg-[var(--red)] px-3 py-1.5 text-[11px] font-bold text-white"
-              >
-                {t("common.retry")}
-              </button>
+              <div className="flex shrink-0 flex-col items-stretch gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => syncQueue.retry()}
+                  className="rounded-[4px] bg-[var(--red)] px-3 py-1.5 text-[11px] font-bold text-white"
+                >
+                  {t("common.retry")}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => syncQueue.discardCurrent()}
+                  className="rounded-[4px] border border-[var(--red)] px-3 py-1.5 text-[11px] font-bold text-[var(--red)]"
+                >
+                  {t("sync.discard")}
+                </button>
+              </div>
             </div>
           ) : null}
           {screenContent}

@@ -17,6 +17,7 @@ export function MoreScreen({
   locale,
   themePref,
   syncStatus,
+  isOnline,
   t,
   onAiModelChange,
   onLocaleChange,
@@ -30,6 +31,7 @@ export function MoreScreen({
   locale: Locale;
   themePref: ThemePreference;
   syncStatus: SyncStatus;
+  isOnline: boolean;
   t: Translator;
   onAiModelChange: (model: AiModelId) => void;
   onLocaleChange: (locale: Locale) => void;
@@ -39,8 +41,9 @@ export function MoreScreen({
 }) {
   const [confirmingDelete, setConfirmingDelete] = useState(false);
 
-  const syncLabel =
-    syncStatus === "saving"
+  const syncLabel = !isOnline
+    ? t("more.sync.offline")
+    : syncStatus === "saving"
       ? t("more.sync.saving")
       : syncStatus === "error"
         ? t("more.sync.error")

@@ -16,6 +16,13 @@ Die Oberflaeche ist zuerst als responsives Webtool gedacht: schnell am Handy erf
 - Geloeschte Aufgaben und Projekte lassen sich direkt per Toast rueckgaengig machen
 - Jede Ansicht hat eine eigene URL: Browser-Zurueck funktioniert, Aufgaben und Projekte sind verlinkbar
 
+## Offline & Sync
+
+- Alle Schreibzugriffe laufen ueber eine persistente Warteschlange (localStorage) und ueberleben Reloads; fehlgeschlagene Aenderungen lassen sich erneut versuchen oder gezielt verwerfen.
+- Die App startet offline: Der Service Worker cached die Oberflaeche, die Daten kommen aus dem lokalen Cache des zuletzt angemeldeten Nutzers, und alles synchronisiert automatisch, sobald wieder eine Verbindung besteht.
+- Appwrite Realtime haelt mehrere Geraete und offene Tabs live synchron.
+- Beim Abmelden werden lokaler Cache und Warteschlange geloescht.
+
 ## Einstellungen
 
 - Sprache: Deutsch/Englisch (folgt initial der Browsersprache, umstellbar unter "Mehr")

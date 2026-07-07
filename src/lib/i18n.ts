@@ -23,6 +23,23 @@ const messages = {
     de: "„{label}“ konnte nicht gespeichert werden: {detail}",
     en: "“{label}” could not be saved: {detail}",
   },
+  "sync.discard": { de: "Änderung verwerfen", en: "Discard change" },
+  "sync.offline": {
+    de: "Du bist offline. Änderungen werden lokal gespeichert und synchronisiert, sobald du wieder online bist.",
+    en: "You are offline. Changes are stored locally and will sync once you are back online.",
+  },
+  "sync.offlinePending.one": {
+    de: "Du bist offline. {count} Änderung wartet auf die Synchronisation.",
+    en: "You are offline. {count} change is waiting to sync.",
+  },
+  "sync.offlinePending.many": {
+    de: "Du bist offline. {count} Änderungen warten auf die Synchronisation.",
+    en: "You are offline. {count} changes are waiting to sync.",
+  },
+  "sync.cachedNotice": {
+    de: "Angezeigt wird der zuletzt gespeicherte Stand.",
+    en: "Showing the last saved state.",
+  },
   "common.retry": { de: "Erneut versuchen", en: "Try again" },
   "common.save": { de: "Speichern", en: "Save" },
   "common.cancel": { de: "Abbrechen", en: "Cancel" },
@@ -356,6 +373,10 @@ const messages = {
   "more.sync.saving": { de: "Appwrite speichert...", en: "Saving to Appwrite..." },
   "more.sync.error": { de: "Fehler beim Speichern", en: "Saving failed" },
   "more.sync.ok": { de: "Alles gespeichert", en: "Everything saved" },
+  "more.sync.offline": {
+    de: "Offline – wartet auf Verbindung",
+    en: "Offline – waiting to reconnect",
+  },
   "more.aiModel": { de: "KI-Modell", en: "AI model" },
   "more.language": { de: "Sprache", en: "Language" },
   "more.theme": { de: "Design", en: "Theme" },

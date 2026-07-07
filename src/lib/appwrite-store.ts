@@ -4,9 +4,13 @@ import {
   APPWRITE_COLLECTIONS,
   APPWRITE_DATABASE_ID,
 } from "@/lib/appwrite-config";
+import {
+  documentToItem,
+  type CollectionKey,
+  type StoredItem,
+} from "@/lib/appwrite-documents";
 import { DEFAULT_AI_MODEL_ID, isAiModelId } from "@/lib/ai-models";
 import { isLocale, type Locale } from "@/lib/i18n";
-import { colorForId } from "@/lib/project-colors";
 import type {
   AiSuggestion,
   AppData,
@@ -19,13 +23,35 @@ import type {
 
 type AppwriteUser = Models.User<Models.Preferences>;
 type DocumentWithId<T> = T & Models.Document;
-type CollectionKey = keyof typeof APPWRITE_COLLECTIONS;
 type AppwritePrefs = Partial<UserSettings>;
-type StoredItem = { id: string };
 
 const PAGE_SIZE = 100;
 // Sicherheitsgrenze gegen Endlosschleifen; weit über realistischen Datenmengen.
 const MAX_DOCUMENTS = 5000;
+
+// Serialisierbare Beschreibung eines Schreibzugriffs. Die Sync-Queue sichert
+// diese Ops in localStorage, damit sie einen Reload überleben.
+export type SyncOp =
+  | { kind: "upsert"; collection: CollectionKey; item: StoredItem }
+  | { kind: "delete"; collection: CollectionKey; id: string }
+  | { kind: "saveSettings"; settings: UserSettings }
+  | { kind: "deleteAll" };
+
+export async function executeSyncOp(op: SyncOp, userId: string) {
+  switch (op.kind) {
+    case "upsert":
+      return upsertItem(op.collection, op.item, userId);
+    case "delete":
+      return deleteItem(op.collection, op.id);
+    case "saveSettings":
+      return saveSettings(op.settings);
+    case "deleteAll":
+      return deleteAllUserData();
+    default:
+      // Korrupte Einträge aus dem Storage niemals still ausführen.
+      throw new Error("Unbekannte Sync-Operation.");
+  }
+}
 
 export async function loadAppDataForUser(
   user: AppwriteUser,
@@ -136,7 +162,7 @@ async function listAllDocuments<T>(key: CollectionKey): Promise<T[]> {
   }
 
   return documents.map((document) =>
-    restoreNullableFields(key, stripDocumentMetadata<T>(document)),
+    documentToItem<T>(key, document as Record<string, unknown>),
   );
 }
 
@@ -159,47 +185,10 @@ function toAppUser(user: AppwriteUser): User {
   };
 }
 
-function stripDocumentMetadata<T>(document: DocumentWithId<T>): T {
-  const data = { ...document } as Record<string, unknown>;
-
-  delete data.$id;
-  delete data.$sequence;
-  delete data.$collectionId;
-  delete data.$databaseId;
-  delete data.$createdAt;
-  delete data.$updatedAt;
-  delete data.$permissions;
-
-  return data as T;
-}
-
 function toAppwriteData<T extends StoredItem>(item: T) {
   return Object.fromEntries(
     Object.entries(item).filter(([, value]) => value !== null),
   ) as Record<string, unknown>;
-}
-
-function restoreNullableFields<T>(key: CollectionKey, item: T): T {
-  const data = { ...(item as Record<string, unknown>) };
-
-  if (key === "projects") {
-    // Bestandsprojekte ohne gespeicherte Farbe bekommen eine stabile Standardfarbe.
-    data.color ??= colorForId(String(data.id ?? ""));
-  }
-
-  if (key === "tasks") {
-    data.dueDate ??= null;
-    data.sourceNoteId ??= null;
-    data.googleSynced ??= null;
-  }
-
-  if (key === "suggestions") {
-    data.suggestedProjectId ??= null;
-    data.suggestedNewProjectTitle ??= null;
-    data.dueDate ??= null;
-  }
-
-  return data as T;
 }
 
 function isNotFound(error: unknown) {
