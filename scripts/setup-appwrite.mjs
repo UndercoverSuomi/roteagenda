@@ -89,7 +89,10 @@ const COLLECTIONS = [
       string("content", 8192),
       boolean("processed"),
       string("title", 256, false),
-      string("enhanced", 8192, false),
+      // Ab ~16k Zeichen speichert Appwrite Strings als TEXT-Spalte, die nicht
+      // gegen das MariaDB-Zeilenlimit (~64 KB) zählt. 8192 als VARCHAR würde
+      // zusammen mit "content" das Limit sprengen.
+      string("enhanced", 20000, false),
       string("tags", 64, false, true),
       string("projectId", 64, false),
       string("relatedNoteIds", 64, false, true),
