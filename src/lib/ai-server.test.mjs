@@ -407,7 +407,7 @@ test("transcription sends audio to an audio-capable openrouter model", async () 
   assert.equal(calls[0].init.headers.Authorization, "Bearer sk-or-test");
 
   const body = JSON.parse(calls[0].init.body);
-  assert.equal(body.model, "google/gemini-2.5-flash");
+  assert.equal(body.model, "xiaomi/mimo-v2.5");
   const audioPart = body.messages[0].content.find(
     (part) => part.type === "input_audio",
   );

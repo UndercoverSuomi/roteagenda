@@ -813,8 +813,10 @@ function createId(prefix: string) {
 
 // ── Medien über OpenRouter (Sprachnotiz + Foto-Notiz) ───────────────
 
-const DEFAULT_TRANSCRIBE_MODEL = "google/gemini-2.5-flash";
-const DEFAULT_VISION_MODEL = "google/gemini-2.5-flash";
+// MiMo-V2.5 (nicht -Pro!) kann Audio- UND Bild-Eingabe und ist deutlich
+// günstiger als Gemini 2.5 Flash. Override via Env möglich.
+const DEFAULT_TRANSCRIBE_MODEL = "xiaomi/mimo-v2.5";
+const DEFAULT_VISION_MODEL = "xiaomi/mimo-v2.5";
 
 type TranscribeParams = {
   audioBase64: string;

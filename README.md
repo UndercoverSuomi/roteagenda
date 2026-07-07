@@ -7,7 +7,7 @@ Die Oberflaeche ist zuerst als responsives Webtool gedacht: schnell am Handy erf
 ## Kernflow
 
 - Registrieren oder anmelden (inkl. Passwort-zuruecksetzen per E-Mail)
-- Notiz anlegen — im Notizen-Grid, per Schnellnotiz, per Mikrofon eingesprochen (Transkription ueber ein audiofaehiges OpenRouter-Modell, Standard `google/gemini-2.5-flash`, Override via `OPENROUTER_TRANSCRIBE_MODEL`) oder als Foto eines Notizzettels (OCR ueber ein bildfaehiges Modell, Override via `OPENROUTER_VISION_MODEL`)
+- Notiz anlegen — im Notizen-Grid, per Schnellnotiz, per Mikrofon eingesprochen (Transkription ueber ein audiofaehiges OpenRouter-Modell, Standard `xiaomi/mimo-v2.5`, Override via `OPENROUTER_TRANSCRIBE_MODEL`) oder als Foto eines Notizzettels (OCR ueber ein bildfaehiges Modell, gleicher Standard, Override via `OPENROUTER_VISION_MODEL`)
 - Die KI veredelt jede neue Notiz automatisch: Titel und ausformulierte Fassung, 1-5 Tags, Projektzuordnung, Verlinkung mit verwandten Notizen (auch manuell erneut ausloesbar)
 - Klingt etwas nach einem Termin ("Arzttermin Praxis41 morgen um 9"), schlaegt die KI einen Kalendereintrag mit Uhrzeit vor — Uebernahme geht an den Google Kalender — plus sinnvolle Vorbereitungs-Aufgaben als eigene Vorschlaege
 - Aufgabenvorschlaege pruefen, bearbeiten, uebernehmen oder ignorieren; die KI kennt Projekte und offene Aufgaben und schlaegt keine Duplikate vor
