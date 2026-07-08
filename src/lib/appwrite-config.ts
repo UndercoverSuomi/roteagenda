@@ -18,3 +18,8 @@ export const APPWRITE_COLLECTIONS = {
   suggestions:
     process.env.NEXT_PUBLIC_APPWRITE_SUGGESTIONS_COLLECTION_ID || "suggestions",
 };
+
+// Storage-Bucket für hochgeladene Foto-Notizen (der Worker liest und
+// löscht die Dateien nach der Analyse).
+export const APPWRITE_MEDIA_BUCKET_ID =
+  process.env.NEXT_PUBLIC_APPWRITE_MEDIA_BUCKET_ID || "noteMedia";

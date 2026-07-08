@@ -5,10 +5,10 @@
 const MAX_DIMENSION = 1600;
 const JPEG_QUALITY = 0.8;
 
-export async function fileToJpegBase64(
+export async function fileToJpegBlob(
   file: File,
   maxDimension = MAX_DIMENSION,
-): Promise<string> {
+): Promise<Blob> {
   let bitmap: ImageBitmap;
   try {
     bitmap = await createImageBitmap(file);
@@ -32,14 +32,32 @@ export async function fileToJpegBase64(
 
     context.drawImage(bitmap, 0, 0, width, height);
 
-    const dataUrl = canvas.toDataURL("image/jpeg", JPEG_QUALITY);
-    const base64 = dataUrl.split(",")[1];
-    if (!base64) {
+    const blob = await new Promise<Blob | null>((resolve) =>
+      canvas.toBlob(resolve, "image/jpeg", JPEG_QUALITY),
+    );
+    if (!blob) {
       throw new Error("Das Bild konnte nicht umgewandelt werden.");
     }
 
-    return base64;
+    return blob;
   } finally {
     bitmap.close();
   }
+}
+
+export async function fileToJpegBase64(
+  file: File,
+  maxDimension = MAX_DIMENSION,
+): Promise<string> {
+  const blob = await fileToJpegBlob(file, maxDimension);
+  const buffer = await blob.arrayBuffer();
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  const chunkSize = 0x8000;
+
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+  }
+
+  return btoa(binary);
 }

@@ -8,7 +8,7 @@ Die Oberflaeche ist zuerst als responsives Webtool gedacht: schnell am Handy erf
 
 - Registrieren oder anmelden (inkl. Passwort-zuruecksetzen per E-Mail)
 - Notiz anlegen — im Notizen-Grid, per Schnellnotiz, per Mikrofon eingesprochen (Transkription ueber ein audiofaehiges OpenRouter-Modell, Standard `xiaomi/mimo-v2.5`, Override via `OPENROUTER_TRANSCRIBE_MODEL`) oder als Foto eines Notizzettels (OCR ueber ein bildfaehiges Modell, gleicher Standard, Override via `OPENROUTER_VISION_MODEL`)
-- Links einwerfen (Notizen-Screen oder Schnellnotiz): Artikel werden serverseitig geladen (mit SSRF-Schutz) und zusammengefasst; bei YouTube-Links sieht sich Gemini das Video wirklich an (Bild + Ton, Standard `google/gemini-3.1-flash-lite`, Override via `OPENROUTER_VIDEO_MODEL`) — das Ergebnis wird als Notiz mit Quell-Link gespeichert
+- Links und Screenshots einwerfen (Notizen-Screen oder Schnellnotiz): Die Notiz erscheint sofort mit dem Status "wird analysiert" — ein asynchroner Notiz-Worker (Appwrite Function, bis zu 300 s statt der 30-s-Grenze der Site) laedt Artikel serverseitig (mit SSRF-Schutz) und fasst sie zusammen, sieht sich YouTube-Videos wirklich an (Bild + Ton, Standard `google/gemini-3.1-flash-lite`, Override via `OPENROUTER_VIDEO_MODEL`) bzw. liest Foto-Uploads per OCR, und fuellt die Notiz samt Veredelung und Vorschlaegen live per Realtime
 - Die KI veredelt jede neue Notiz automatisch: Titel und ausformulierte Fassung, 1-5 Tags, Projektzuordnung, Verlinkung mit verwandten Notizen (auch manuell erneut ausloesbar)
 - Klingt etwas nach einem Termin ("Arzttermin Praxis41 morgen um 9"), schlaegt die KI einen Kalendereintrag mit Uhrzeit vor — Uebernahme geht an den Google Kalender — plus sinnvolle Vorbereitungs-Aufgaben als eigene Vorschlaege
 - Aufgabenvorschlaege pruefen, bearbeiten, uebernehmen oder ignorieren; die KI kennt Projekte und offene Aufgaben und schlaegt keine Duplikate vor
@@ -96,7 +96,18 @@ MINIMAX_API_KEY=...
 DEEPSEEK_API_KEY=...
 ```
 
-Optionale Overrides fuer Base-URLs und Modell-Slugs stehen in [.env.example](.env.example). Alle KI-Routen (`/api/ai/enhance-note`, `/api/ai/transcribe`, `/api/ai/extract-image`, `/api/ai/summarize-url`, `/api/ai/daily-briefing`) verlangen eine gueltige Appwrite-Session (JWT), validieren und begrenzen ihre Eingaben und sind pro Nutzer gedrosselt.
+Optionale Overrides fuer Base-URLs und Modell-Slugs stehen in [.env.example](.env.example). Alle KI-Routen (`/api/ai/enhance-note`, `/api/ai/transcribe`, `/api/ai/extract-image`, `/api/ai/daily-briefing`) verlangen eine gueltige Appwrite-Session (JWT), validieren und begrenzen ihre Eingaben und sind pro Nutzer gedrosselt. Link- und Foto-Notizen verarbeitet der asynchrone Notiz-Worker (siehe unten).
+
+### 3. Notiz-Worker deployen (fuer Link-/Foto-Notizen)
+
+Der Worker ist eine Appwrite Function, die per Datenbank-Event auf neue Link-/Foto-Notizen reagiert. Einmalig (und nach jeder Aenderung an der geteilten KI-Logik):
+
+```bash
+npm run build:worker
+node scripts/setup-worker.mjs --key=<api-key>
+```
+
+Der API-Key braucht dafuer die Scopes der Kategorie **Functions** (read+write). Das Script legt die Function an (Runtime, Event-Trigger, Timeout 300 s, Scopes), uebernimmt `OPENROUTER_*`-Variablen aus `.env.local` und deployt das Bundle. Der Storage-Bucket `noteMedia` fuer Foto-Uploads entsteht ueber `scripts/setup-appwrite.mjs` (Key braucht dann zusaetzlich **Storage**-Scopes).
 
 ### 3. Entwicklung
 

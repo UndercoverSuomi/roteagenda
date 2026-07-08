@@ -1,4 +1,4 @@
-import { Account, Client, Databases } from "appwrite";
+import { Account, Client, Databases, Storage } from "appwrite";
 import {
   APPWRITE_ENDPOINT,
   APPWRITE_PROJECT_ID,
@@ -10,5 +10,6 @@ const client = new Client()
 
 const account = new Account(client);
 const databases = new Databases(client);
+const storage = new Storage(client);
 
-export { account, client, databases };
+export { account, client, databases, storage };

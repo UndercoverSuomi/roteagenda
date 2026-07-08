@@ -140,29 +140,6 @@ export async function extractPhotoText({
   return payload.text;
 }
 
-export async function summarizeUrl({
-  url,
-  modelId,
-  locale,
-}: {
-  url: string;
-  modelId: AiModelId;
-  locale: Locale;
-}): Promise<{ text: string; title: string | null }> {
-  const payload = await authorizedJsonPost<{ text?: string; title?: string | null }>(
-    "/api/ai/summarize-url",
-    { url, modelId, locale },
-    (status) =>
-      `Die Link-Analyse ist fehlgeschlagen (${status}). Bitte prüfe die Konfiguration.`,
-  );
-
-  if (!payload.text) {
-    throw new Error("Die Link-Analyse hat keinen Text geliefert.");
-  }
-
-  return { text: payload.text, title: payload.title ?? null };
-}
-
 export async function fetchDailyBriefing({
   modelId,
   tasks,

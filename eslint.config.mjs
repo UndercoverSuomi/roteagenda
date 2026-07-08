@@ -14,6 +14,8 @@ const eslintConfig = defineConfig([
     "next-env.d.ts",
     // Service Worker läuft außerhalb des App-Bundles (eigene Globals).
     "public/sw.js",
+    // Appwrite-Function: eigenes Bundle mit eigener Runtime.
+    "functions/**",
   ]),
 ]);
 

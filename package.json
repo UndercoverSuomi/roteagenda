@@ -8,7 +8,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "node --test src/lib/*.test.mjs"
+    "test": "node --test src/lib/*.test.mjs",
+    "build:worker": "npx --yes esbuild functions/process-note/src/main.ts --bundle --platform=node --format=esm --target=node20 --external:node-appwrite --outfile=functions/process-note/dist/main.js"
   },
   "dependencies": {
     "appwrite": "^26.0.0",

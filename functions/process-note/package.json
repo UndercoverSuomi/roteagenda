@@ -1,0 +1,9 @@
+{
+  "name": "process-note-worker",
+  "private": true,
+  "type": "module",
+  "main": "dist/main.js",
+  "dependencies": {
+    "node-appwrite": "^14.1.0"
+  }
+}

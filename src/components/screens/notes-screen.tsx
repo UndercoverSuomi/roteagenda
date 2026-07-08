@@ -2,7 +2,7 @@
 
 import { Camera, Link2, Loader2, Pin, Plus, Sparkles, StickyNote } from "lucide-react";
 import { useRef } from "react";
-import { cx, noteDisplayTitle } from "@/components/app-helpers";
+import { cx, isNotePending, noteDisplayTitle } from "@/components/app-helpers";
 import { ScreenHeader } from "@/components/ui/primitives";
 import type { Translator } from "@/lib/i18n";
 import type { Note, NoteSource, Project } from "@/lib/types";
@@ -204,7 +204,8 @@ function NoteCard({
   onTogglePin: () => void;
 }) {
   const SourceIcon = SOURCE_ICONS[note.source];
-  const preview = note.enhanced || note.content;
+  const pending = isNotePending(note);
+  const preview = note.enhanced || note.content || (pending ? "" : note.sourceUrl ?? "");
 
   return (
     <article className="relative break-inside-avoid rounded-[7px] border border-[var(--line)] bg-[var(--surface)] shadow-sm transition hover:bg-[var(--surface-strong)]">
@@ -224,11 +225,20 @@ function NoteCard({
       </button>
       <button type="button" onClick={onOpen} className="block w-full p-4 pr-10 text-left">
         <h3 className="font-display text-[15px] font-bold leading-6">
-          {noteDisplayTitle(note, t("notes.untitled"))}
+          {pending && note.sourceUrl
+            ? note.sourceUrl.replace(/^https?:\/\/(www\.)?/, "").slice(0, 60)
+            : noteDisplayTitle(note, t("notes.untitled"))}
         </h3>
-        <p className="mt-2 line-clamp-6 whitespace-pre-line text-[12px] leading-5 text-[var(--ink-soft)]">
-          {preview}
-        </p>
+        {pending ? (
+          <p className="mt-2 flex items-center gap-2 text-[12px] leading-5 text-[var(--muted)]">
+            <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
+            {t("notes.pendingCard")}
+          </p>
+        ) : (
+          <p className="mt-2 line-clamp-6 whitespace-pre-line text-[12px] leading-5 text-[var(--ink-soft)]">
+            {preview}
+          </p>
+        )}
         {note.tags.length ? (
           <p className="mt-3 flex flex-wrap gap-1.5">
             {note.tags.slice(0, 3).map((tag) => (

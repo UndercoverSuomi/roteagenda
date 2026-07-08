@@ -1,5 +1,5 @@
 import { ArrowLeft, Edit3, Loader2, Pin, Sparkles } from "lucide-react";
-import { cx, noteDisplayTitle } from "@/components/app-helpers";
+import { cx, isNotePending, noteDisplayTitle } from "@/components/app-helpers";
 import { ScreenHeader } from "@/components/ui/primitives";
 import { TaskLine } from "@/components/ui/task-items";
 import { formatDateLabel } from "@/lib/date";
@@ -54,6 +54,8 @@ export function NoteDetailScreen({
 }) {
   const headingClass =
     "text-[12px] font-bold uppercase tracking-[0.04em] text-[var(--muted)]";
+  // Link-/Foto-Notizen füllt der Notiz-Worker asynchron; bis dahin Pending-Banner.
+  const pending = isNotePending(note);
 
   return (
     <div className="flex flex-1 flex-col px-6 pb-8 pt-3 md:px-8 md:pt-8 lg:px-10">
@@ -111,6 +113,21 @@ export function NoteDetailScreen({
       ) : null}
 
       <div className="mt-6 space-y-6">
+        {pending ? (
+          <div className="flex items-start gap-3 rounded-[6px] border border-[var(--line)] bg-[var(--surface)] p-4">
+            <Loader2 className="mt-0.5 h-4 w-4 shrink-0 animate-spin text-[var(--green-2)]" />
+            <p className="text-[13px] leading-6 text-[var(--ink-soft)]">
+              {note.source === "url" ? t("note.pendingUrl") : t("note.pendingImage")}
+            </p>
+          </div>
+        ) : null}
+
+        {note.processingError ? (
+          <p className="rounded-[5px] border border-[var(--red)] bg-[var(--surface-strong)] p-3 text-[12px] leading-5 text-[var(--red)]">
+            {t("note.processingFailed", { detail: note.processingError })}
+          </p>
+        ) : null}
+
         {note.enhanced ? (
           <section>
             <h2 className={headingClass}>{t("note.enhancedHeading")}</h2>
@@ -120,23 +137,28 @@ export function NoteDetailScreen({
           </section>
         ) : null}
 
-        <section>
-          <h2 className={headingClass}>{t("note.originalHeading")}</h2>
-          <p className="mt-2 whitespace-pre-line rounded-[6px] bg-[var(--surface)] p-4 text-[13px] leading-6 text-[var(--muted)]">
-            {note.content}
-          </p>
-          {note.sourceUrl ? (
-            <a
-              href={note.sourceUrl}
-              target="_blank"
-              rel="noreferrer noopener"
-              className="mt-2 block truncate text-[12px] font-semibold text-[var(--red)] underline underline-offset-2"
-            >
-              {note.sourceUrl}
-            </a>
-          ) : null}
-        </section>
+        {note.content || note.sourceUrl ? (
+          <section>
+            <h2 className={headingClass}>{t("note.originalHeading")}</h2>
+            {note.content ? (
+              <p className="mt-2 whitespace-pre-line rounded-[6px] bg-[var(--surface)] p-4 text-[13px] leading-6 text-[var(--muted)]">
+                {note.content}
+              </p>
+            ) : null}
+            {note.sourceUrl ? (
+              <a
+                href={note.sourceUrl}
+                target="_blank"
+                rel="noreferrer noopener"
+                className="mt-2 block truncate text-[12px] font-semibold text-[var(--red)] underline underline-offset-2"
+              >
+                {note.sourceUrl}
+              </a>
+            ) : null}
+          </section>
+        ) : null}
 
+        {!pending ? (
         <section>
           {!note.processed && !isEnhancing ? (
             <p className="mb-2 text-[13px] leading-6 text-[var(--muted)]">
@@ -146,7 +168,7 @@ export function NoteDetailScreen({
           <button
             type="button"
             onClick={onEnhance}
-            disabled={isEnhancing}
+            disabled={isEnhancing || !note.content.trim()}
             className="flex items-center gap-2 rounded-[5px] border border-[var(--line-strong)] px-4 py-2.5 text-[12px] font-bold disabled:opacity-50"
           >
             {isEnhancing ? (
@@ -185,6 +207,7 @@ export function NoteDetailScreen({
             </div>
           ) : null}
         </section>
+        ) : null}
 
         {relatedNotes.length ? (
           <section>

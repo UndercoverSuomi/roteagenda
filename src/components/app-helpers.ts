@@ -60,6 +60,15 @@ export function suggestionStatusKey(suggestion: AiSuggestion): MessageKey {
   return "sugg.status.confident";
 }
 
+// Notizen aus Link/Foto werden asynchron vom Notiz-Worker gefüllt.
+export function isNotePending(note: Note) {
+  return (
+    (note.source === "url" || note.source === "image") &&
+    !note.processed &&
+    !note.processingError
+  );
+}
+
 // Anzeigetitel einer Notiz: KI-Titel, sonst erster Inhalts-Ausschnitt.
 export function noteDisplayTitle(note: Note, fallback: string) {
   if (note.title.trim()) return note.title;

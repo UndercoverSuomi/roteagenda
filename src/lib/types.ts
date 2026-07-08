@@ -56,6 +56,10 @@ export interface Note {
   sourceUrl: string | null;
   pinned: boolean;
   processed: boolean;
+  // Async-Verarbeitung durch den Notiz-Worker (Appwrite Function):
+  // Storage-Datei-ID eines hochgeladenen Fotos bzw. letzte Fehlermeldung.
+  pendingFileId: string | null;
+  processingError: string | null;
   createdAt: string;
   updatedAt: string;
 }

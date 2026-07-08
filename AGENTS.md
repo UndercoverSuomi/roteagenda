@@ -17,6 +17,7 @@ This version has breaking changes — APIs, conventions, and file structure may 
 - `public/sw.js` — Service Worker für die Offline-Shell; cached nur Same-Origin-GETs, nie `/api/` oder Cross-Origin (Appwrite/Google). Registrierung nur in Produktion.
 - `src/app/api/ai/` — Route Handler für KI-Verarbeitung, Transkription, Foto-OCR, Link-/Video-Zusammenfassung und Briefing (Appwrite-JWT-Prüfung + Rate-Limit).
 - `src/lib/web-content.ts` — nur serverseitig (node:dns): SSRF-Härtung für eingeworfene URLs, Seitenabruf mit Limits, HTML→Text, YouTube-Erkennung/oEmbed.
+- `functions/process-note/` — asynchroner Notiz-Worker (Appwrite Function, DB-Event auf neue Link-/Foto-Notizen; Timeout 300 s statt 30-s-Site-Limit). Teilt sich die KI-Logik mit der App: nach Änderungen an `src/lib/(ai-server|web-content|ai-models|appwrite-documents)` immer `npm run build:worker` ausführen (Bundle ist eingecheckt) und mit `node scripts/setup-worker.mjs --key=…` neu deployen.
 
 # Playbooks
 

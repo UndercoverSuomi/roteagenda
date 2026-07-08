@@ -1,6 +1,6 @@
 "use client";
 
-import { ID, type Models } from "appwrite";
+import { ID, Permission, Role, type Models } from "appwrite";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   cx,
@@ -38,20 +38,16 @@ import { DesktopInsightPanel } from "@/components/ui/insight-panel";
 import { BottomNav, DesktopSidebar } from "@/components/ui/navigation";
 import { AppShellMessage, WorkSurface } from "@/components/ui/primitives";
 import { UndoToast } from "@/components/ui/undo-toast";
-import {
-  enhanceNoteWithConfiguredAi,
-  extractPhotoText,
-  fetchDailyBriefing,
-  summarizeUrl,
-} from "@/lib/ai-client";
-import { fileToJpegBase64 } from "@/lib/image";
+import { enhanceNoteWithConfiguredAi, fetchDailyBriefing } from "@/lib/ai-client";
+import { fileToJpegBlob } from "@/lib/image";
 import { getAiModelLabel, MAX_NOTE_LENGTH, type AiModelId } from "@/lib/ai-models";
 import { createEmptyAppData } from "@/lib/app-data";
 import { buildAppUrl, parseAppUrl } from "@/lib/app-url";
-import { account, client } from "@/lib/appwrite";
+import { account, client, storage } from "@/lib/appwrite";
 import {
   APPWRITE_COLLECTIONS,
   APPWRITE_DATABASE_ID,
+  APPWRITE_MEDIA_BUCKET_ID,
 } from "@/lib/appwrite-config";
 import {
   executeSyncOp,
@@ -592,6 +588,7 @@ export function RoteAgendaApp() {
         projectId: result.enhancement.projectId ?? latest.projectId,
         relatedNoteIds: result.enhancement.relatedNoteIds,
         processed: true,
+        processingError: null,
         updatedAt: new Date().toISOString(),
       };
 
@@ -637,6 +634,8 @@ export function RoteAgendaApp() {
       sourceUrl: null,
       pinned: false,
       processed: false,
+      pendingFileId: null,
+      processingError: null,
       createdAt: now,
       updatedAt: now,
     });
@@ -690,19 +689,19 @@ export function RoteAgendaApp() {
     }
   }
 
-  // Legt eine importierte Notiz an (URL/Screenshot), öffnet sie und
-  // stößt die normale KI-Veredelung an.
-  function createNoteFromImport(input: {
-    content: string;
-    title: string;
-    source: Note["source"];
+  // Legt eine Import-Notiz an (Link/Screenshot) und öffnet sie. Die
+  // eigentliche Analyse macht der Notiz-Worker (Appwrite Function)
+  // asynchron — die Notiz füllt sich per Realtime von selbst.
+  function createPendingImportNote(input: {
+    source: "url" | "image";
     sourceUrl: string | null;
+    pendingFileId: string | null;
   }): Note {
     const now = new Date().toISOString();
     const note: Note = {
       id: createLocalId("note"),
-      title: input.title,
-      content: input.content,
+      title: "",
+      content: "",
       enhanced: "",
       tags: [],
       projectId: null,
@@ -711,6 +710,8 @@ export function RoteAgendaApp() {
       sourceUrl: input.sourceUrl,
       pinned: false,
       processed: false,
+      pendingFileId: input.pendingFileId,
+      processingError: null,
       createdAt: now,
       updatedAt: now,
     };
@@ -718,48 +719,40 @@ export function RoteAgendaApp() {
     setData((current) => ({ ...current, notes: [note, ...current.notes] }));
     persist(t("entity.note"), { kind: "upsert", collection: "notes", item: note });
     goTo("note", { noteId: note.id });
-    void runNoteEnhancement(note).catch(() => undefined);
 
     return note;
   }
 
-  async function handleImportUrl() {
+  function handleImportUrl() {
     const url = noteImportUrl.trim();
     if (!/^https?:\/\/\S+$/i.test(url)) return;
 
     setNoteImportError(null);
-    setIsImportingNote(true);
-    try {
-      const result = await summarizeUrl({
-        url,
-        modelId: data.settings.aiModel,
-        locale,
-      });
-      setNoteImportUrl("");
-      createNoteFromImport({
-        content: result.text,
-        title: result.title ?? "",
-        source: "url",
-        sourceUrl: url,
-      });
-    } catch (error) {
-      setNoteImportError(readErrorMessage(error, t));
-    } finally {
-      setIsImportingNote(false);
-    }
+    setNoteImportUrl("");
+    createPendingImportNote({ source: "url", sourceUrl: url, pendingFileId: null });
   }
 
   async function handleImportImage(file: File) {
     setNoteImportError(null);
     setIsImportingNote(true);
     try {
-      const imageBase64 = await fileToJpegBase64(file);
-      const text = await extractPhotoText({ imageBase64, locale });
-      createNoteFromImport({
-        content: text,
-        title: "",
+      // Verkleinertes JPEG in den Storage-Bucket laden; der Worker liest
+      // und löscht die Datei nach der Analyse.
+      const blob = await fileToJpegBlob(file);
+      const uploaded = await storage.createFile({
+        bucketId: APPWRITE_MEDIA_BUCKET_ID,
+        fileId: ID.unique(),
+        file: new File([blob], "note.jpg", { type: "image/jpeg" }),
+        permissions: [
+          Permission.read(Role.user(userId)),
+          Permission.update(Role.user(userId)),
+          Permission.delete(Role.user(userId)),
+        ],
+      });
+      createPendingImportNote({
         source: "image",
         sourceUrl: null,
+        pendingFileId: uploaded.$id,
       });
     } catch (error) {
       setNoteImportError(readErrorMessage(error, t));
@@ -794,26 +787,11 @@ export function RoteAgendaApp() {
     setCaptureNotice(null);
     setIsProcessingNote(true);
 
-    // Reine URL? Dann den Link-Import-Weg nehmen (Seite/Video zusammenfassen).
+    // Reine URL? Dann als Link-Notiz anlegen — der Worker analysiert asynchron.
     if (/^https?:\/\/\S+$/i.test(trimmed)) {
-      try {
-        const result = await summarizeUrl({
-          url: trimmed,
-          modelId: data.settings.aiModel,
-          locale,
-        });
-        setCaptureText("");
-        createNoteFromImport({
-          content: result.text,
-          title: result.title ?? "",
-          source: "url",
-          sourceUrl: trimmed,
-        });
-      } catch (error) {
-        setCaptureError(readErrorMessage(error, t));
-      } finally {
-        setIsProcessingNote(false);
-      }
+      setCaptureText("");
+      setIsProcessingNote(false);
+      createPendingImportNote({ source: "url", sourceUrl: trimmed, pendingFileId: null });
       return;
     }
 
@@ -831,6 +809,8 @@ export function RoteAgendaApp() {
       sourceUrl: null,
       pinned: false,
       processed: false,
+      pendingFileId: null,
+      processingError: null,
       createdAt: now,
       updatedAt: now,
     };

@@ -43,4 +43,8 @@ npm run build   # inkl. TypeScript-Check
   überleben sie Reloads/Offline (siehe AGENTS.md).
 - Screens laufen über Query-Param-URLs (`src/lib/app-url.ts`, Params s/p/t/n);
   neue Screens dort + in `readInitialLocation`/popstate registrieren.
+- Link-/Foto-Notizen verarbeitet der **Notiz-Worker** (`functions/process-note`,
+  Appwrite Function mit DB-Event-Trigger). Er bündelt Code aus `src/lib/` —
+  nach Änderungen dort: `npm run build:worker` (Bundle ist eingecheckt!) und
+  `node scripts/setup-worker.mjs --key=…` zum Redeploy.
 - Am Ende committen und auf `main` pushen (Workflow des Nutzers, keine PRs).

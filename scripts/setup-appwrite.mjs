@@ -99,6 +99,8 @@ const COLLECTIONS = [
       string("source", 16, false),
       string("sourceUrl", 1024, false),
       boolean("pinned", false),
+      string("pendingFileId", 64, false),
+      string("processingError", 1024, false),
       string("createdAt", 32),
       string("updatedAt", 32, false),
     ],
@@ -304,6 +306,29 @@ for (const collection of COLLECTIONS) {
 
   await waitForAttributes(collection.id);
   console.log(`  ✓ Alle Attribute von "${collection.id}" sind aktiv`);
+}
+
+// Storage-Bucket für Foto-Notizen (der Notiz-Worker liest und löscht
+// die Dateien nach der Analyse). Braucht Storage-Scopes am API-Key.
+console.log('\nStorage-Bucket "noteMedia":');
+try {
+  await ensure('Bucket "noteMedia"', {
+    checkPath: "/storage/buckets/noteMedia",
+    create: () =>
+      api("POST", "/storage/buckets", {
+        bucketId: "noteMedia",
+        name: "noteMedia",
+        permissions: ['create("users")'],
+        fileSecurity: true,
+        maximumFileSize: 10_000_000,
+        allowedFileExtensions: ["jpg", "jpeg", "png", "webp"],
+      }),
+  });
+} catch (error) {
+  console.log(
+    `  ! Bucket konnte nicht angelegt werden: ${error.message}\n` +
+      "    (API-Key braucht zusätzlich die Storage-Scopes: buckets/files, read+write)",
+  );
 }
 
 if (args["no-env-write"] !== "true") {

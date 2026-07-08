@@ -60,6 +60,8 @@ function restoreNullableFields(key: CollectionKey, item: Record<string, unknown>
     data.source ??= "capture";
     data.sourceUrl ??= null;
     data.pinned ??= false;
+    data.pendingFileId ??= null;
+    data.processingError ??= null;
     data.updatedAt ??= data.createdAt ?? "";
   }
 

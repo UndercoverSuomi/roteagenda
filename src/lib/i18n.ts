@@ -231,6 +231,19 @@ const messages = {
     de: "Diese Notiz wurde noch nicht von der KI verarbeitet.",
     en: "This note has not been processed by the AI yet.",
   },
+  "note.pendingUrl": {
+    de: "Der Link wird im Hintergrund analysiert – bei Videos kann das ein paar Minuten dauern. Die Notiz füllt sich automatisch.",
+    en: "The link is being analyzed in the background – videos can take a few minutes. The note fills in automatically.",
+  },
+  "note.pendingImage": {
+    de: "Das Foto wird im Hintergrund gelesen. Die Notiz füllt sich automatisch.",
+    en: "The photo is being read in the background. The note fills in automatically.",
+  },
+  "note.processingFailed": {
+    de: "Analyse fehlgeschlagen: {detail}",
+    en: "Processing failed: {detail}",
+  },
+  "notes.pendingCard": { de: "Wird analysiert…", en: "Analyzing…" },
   "note.suggestionsReady.one": {
     de: "{count} neuer Vorschlag liegt in der Inbox.",
     en: "{count} new suggestion is waiting in the inbox.",
