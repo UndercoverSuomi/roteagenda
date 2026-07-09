@@ -45,14 +45,6 @@ export default async ({ req, res, log, error }: Context) => {
   if (!doc || typeof doc.$id !== "string") {
     return res.json({ skipped: "kein Dokument im Event" });
   }
-  if (doc.processed === true) {
-    return res.json({ skipped: "bereits verarbeitet" });
-  }
-  const source = doc.source;
-  if (source !== "url" && source !== "image") {
-    // Manuelle/Capture-Notizen veredelt die App synchron selbst.
-    return res.json({ skipped: `source=${String(source)}` });
-  }
 
   const client = new Client()
     .setEndpoint(process.env.APPWRITE_FUNCTION_API_ENDPOINT ?? "")
@@ -61,6 +53,38 @@ export default async ({ req, res, log, error }: Context) => {
   const databases = new Databases(client);
   const storage = new Storage(client);
   const users = new Users(client);
+
+  // Der Trigger lauscht auf ALLE Dokument-Events der Collection (der
+  // Event-Validator kennt die .upsert-Events der App nicht einzeln).
+  // Deshalb hier aussortieren, bevor Kosten entstehen:
+  // Gelöschte Notizen nur noch von verwaisten Upload-Dateien befreien.
+  const eventName = req.headers["x-appwrite-event"] ?? "";
+  if (eventName.endsWith(".delete")) {
+    await cleanupFile(storage, doc);
+    return res.json({ skipped: "delete-event" });
+  }
+  if (doc.processed === true) {
+    return res.json({ skipped: "bereits verarbeitet" });
+  }
+  if (typeof doc.processingError === "string" && doc.processingError) {
+    // Der Fehlerstatus stammt vom Worker selbst — nie erneut anlaufen,
+    // sonst entsteht über das eigene Update-Event eine Endlosschleife.
+    return res.json({ skipped: "bereits fehlgeschlagen" });
+  }
+  const source = doc.source;
+  if (source !== "url" && source !== "image") {
+    // Manuelle/Capture-Notizen veredelt die App synchron selbst.
+    return res.json({ skipped: `source=${String(source)}` });
+  }
+  if (
+    typeof doc.createdAt === "string" &&
+    typeof doc.updatedAt === "string" &&
+    doc.updatedAt !== doc.createdAt
+  ) {
+    // Frische Importe tragen updatedAt === createdAt; spätere Updates
+    // (z. B. Pinnen während der Analyse) sind Echos und keine neuen Aufträge.
+    return res.json({ skipped: "bereits angefasst" });
+  }
 
   const noteId = doc.$id as string;
   const now = () => new Date().toISOString();

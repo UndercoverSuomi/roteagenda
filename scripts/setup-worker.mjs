@@ -9,12 +9,11 @@
 //
 // Nutzung:
 //   node scripts/setup-worker.mjs --key=<api-key>
-// Optional: --endpoint=... --project=... --timeout=300
+// Optional: --endpoint=... --project=... --timeout=300 --runtime=node-22
 
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, unlinkSync } from "node:fs";
 import { resolve } from "node:path";
 import { spawnSync } from "node:child_process";
-import { tmpdir } from "node:os";
 
 const args = Object.fromEntries(
   process.argv.slice(2).map((arg) => {
@@ -66,15 +65,21 @@ async function api(method, path, body, form) {
 }
 
 // ── Runtime wählen ────────────────────────────────────────────────────
-const runtimes = (await api("GET", "/functions/runtimes")).runtimes ?? [];
-const nodeRuntimes = runtimes
-  .map((runtime) => runtime.$id)
-  .filter((id) => /^node-\d/.test(id))
-  .sort((a, b) => parseFloat(b.slice(5)) - parseFloat(a.slice(5)));
-const runtime = nodeRuntimes[0];
+// GET /functions/runtimes ist auf Appwrite Cloud (1.9.x) Console-only und
+// antwortet API-Keys mit 401 — dann auf den Fallback bzw. --runtime ausweichen.
+const FALLBACK_RUNTIME = "node-22";
+let runtime = args.runtime;
 if (!runtime) {
-  console.error("Keine Node-Runtime verfügbar:", runtimes.map((r) => r.$id).join(", "));
-  process.exit(1);
+  try {
+    const runtimes = (await api("GET", "/functions/runtimes")).runtimes ?? [];
+    runtime = runtimes
+      .map((entry) => entry.$id)
+      .filter((id) => /^node-\d/.test(id))
+      .sort((a, b) => parseFloat(b.slice(5)) - parseFloat(a.slice(5)))[0];
+  } catch {
+    runtime = FALLBACK_RUNTIME;
+  }
+  runtime ||= FALLBACK_RUNTIME;
 }
 console.log(`Runtime: ${runtime}`);
 
@@ -89,11 +94,10 @@ const functionConfig = {
   logging: true,
   execute: [],
   // Die App legt Notizen über die Sync-Queue per Upsert an; Appwrite feuert
-  // dafür ein eigenes .upsert-Event (kein .create) — deshalb beide abonnieren.
-  events: [
-    `databases.${DATABASE_ID}.collections.${NOTES_COLLECTION_ID}.documents.*.create`,
-    `databases.${DATABASE_ID}.collections.${NOTES_COLLECTION_ID}.documents.*.upsert`,
-  ],
+  // dafür .upsert-Events, die der Event-Validator für Function-Trigger
+  // (Cloud 1.9.5) aber nicht akzeptiert. Deshalb alle Dokument-Events der
+  // Collection abonnieren — der Worker filtert Delete/Echos selbst.
+  events: [`databases.${DATABASE_ID}.collections.${NOTES_COLLECTION_ID}.documents.*`],
   scopes: [
     "users.read",
     "databases.read",
@@ -153,21 +157,24 @@ for (const key of wanted) {
     });
     console.log(`  · Variable ${key} aktualisiert`);
   } else {
-    await api("POST", `/functions/${FUNCTION_ID}/variables`, { key, value: localEnv[key] });
+    // Appwrite 1.9+ verlangt eine explizite variableId ("unique()" generiert).
+    await api("POST", `/functions/${FUNCTION_ID}/variables`, {
+      variableId: "unique()",
+      key,
+      value: localEnv[key],
+    });
     console.log(`  ✓ Variable ${key} gesetzt`);
   }
 }
 
 // ── Deployment hochladen und aktivieren ──────────────────────────────
-const tarPath = resolve(tmpdir(), `process-note-${Date.now()}.tar.gz`);
-const tar = spawnSync("tar", [
-  "-czf",
-  tarPath,
-  "-C",
-  resolve("functions/process-note"),
-  "package.json",
-  "dist",
-]);
+// tar bewusst nur mit relativen Pfaden aufrufen: GNU tar unter Windows
+// deutet absolute Pfade wie "C:\..." sonst als Remote-Host.
+const tarName = `.worker-deploy-${Date.now()}.tar.gz`;
+const tarPath = resolve(tarName);
+const tar = spawnSync("tar", ["-czf", `../../${tarName}`, "package.json", "dist"], {
+  cwd: resolve("functions/process-note"),
+});
 if (tar.status !== 0) {
   console.error("tar fehlgeschlagen:", tar.stderr?.toString());
   process.exit(1);
@@ -176,6 +183,7 @@ if (tar.status !== 0) {
 const form = new FormData();
 form.append("code", new Blob([readFileSync(tarPath)], { type: "application/gzip" }), "code.tar.gz");
 form.append("activate", "true");
+unlinkSync(tarPath);
 
 const deployment = await api("POST", `/functions/${FUNCTION_ID}/deployments`, null, form);
 console.log(`✓ Deployment ${deployment.$id} hochgeladen — Build läuft...`);

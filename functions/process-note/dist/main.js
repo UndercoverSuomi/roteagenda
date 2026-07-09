@@ -939,17 +939,28 @@ var main_default = async ({ req, res, log, error }) => {
   if (!doc || typeof doc.$id !== "string") {
     return res.json({ skipped: "kein Dokument im Event" });
   }
+  const client = new Client().setEndpoint(process.env.APPWRITE_FUNCTION_API_ENDPOINT ?? "").setProject(process.env.APPWRITE_FUNCTION_PROJECT_ID ?? "").setKey(req.headers["x-appwrite-key"] ?? "");
+  const databases = new Databases(client);
+  const storage = new Storage(client);
+  const users = new Users(client);
+  const eventName = req.headers["x-appwrite-event"] ?? "";
+  if (eventName.endsWith(".delete")) {
+    await cleanupFile(storage, doc);
+    return res.json({ skipped: "delete-event" });
+  }
   if (doc.processed === true) {
     return res.json({ skipped: "bereits verarbeitet" });
+  }
+  if (typeof doc.processingError === "string" && doc.processingError) {
+    return res.json({ skipped: "bereits fehlgeschlagen" });
   }
   const source = doc.source;
   if (source !== "url" && source !== "image") {
     return res.json({ skipped: `source=${String(source)}` });
   }
-  const client = new Client().setEndpoint(process.env.APPWRITE_FUNCTION_API_ENDPOINT ?? "").setProject(process.env.APPWRITE_FUNCTION_PROJECT_ID ?? "").setKey(req.headers["x-appwrite-key"] ?? "");
-  const databases = new Databases(client);
-  const storage = new Storage(client);
-  const users = new Users(client);
+  if (typeof doc.createdAt === "string" && typeof doc.updatedAt === "string" && doc.updatedAt !== doc.createdAt) {
+    return res.json({ skipped: "bereits angefasst" });
+  }
   const noteId = doc.$id;
   const now = () => (/* @__PURE__ */ new Date()).toISOString();
   try {
