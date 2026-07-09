@@ -14,7 +14,7 @@ test("today maps to the bare root url", () => {
 });
 
 test("simple screens round-trip through the url", () => {
-  for (const screen of ["capture", "inbox", "notes", "projects", "more", "search"]) {
+  for (const screen of ["capture", "inbox", "notes", "graph", "projects", "more", "search"]) {
     const url = buildAppUrl({ screen, projectId: null, taskId: null, noteId: null });
     assert.equal(url, `/?s=${screen}`);
     assert.deepEqual(parseAppUrl(new URL(url, "https://example.test").search), {

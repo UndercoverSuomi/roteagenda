@@ -8,6 +8,7 @@ const URL_SCREENS = [
   "inbox",
   "notes",
   "note",
+  "graph",
   "projects",
   "project",
   "task",

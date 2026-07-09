@@ -1,6 +1,6 @@
 "use client";
 
-import { Camera, Link2, Loader2, Pin, Plus, Sparkles, StickyNote } from "lucide-react";
+import { Camera, Link2, Loader2, Pin, Plus, Sparkles, StickyNote, Waypoints } from "lucide-react";
 import { useRef } from "react";
 import { cx, isNotePending, noteDisplayTitle } from "@/components/app-helpers";
 import { ScreenHeader } from "@/components/ui/primitives";
@@ -21,6 +21,7 @@ export function NotesScreen({
   t,
   onOpenNote,
   onCreateNote,
+  onOpenGraph,
   onTogglePin,
   onImportUrlChange,
   onImportUrl,
@@ -34,6 +35,7 @@ export function NotesScreen({
   t: Translator;
   onOpenNote: (noteId: string) => void;
   onCreateNote: () => void;
+  onOpenGraph: () => void;
   onTogglePin: (noteId: string) => void;
   onImportUrlChange: (value: string) => void;
   onImportUrl: () => void;
@@ -49,6 +51,9 @@ export function NotesScreen({
       <ScreenHeader
         title={t("notes.title")}
         leftIcon={<StickyNote className="h-5 w-5" />}
+        extraRightIcon={<Waypoints className="h-5 w-5" />}
+        extraRightLabel={t("notes.graph")}
+        onExtraRight={onOpenGraph}
         rightIcon={<Plus className="h-5 w-5" />}
         rightLabel={t("notes.new")}
         onRight={onCreateNote}

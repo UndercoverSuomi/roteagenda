@@ -257,6 +257,28 @@ const messages = {
   "note.source.capture": { de: "Schnellnotiz", en: "Quick capture" },
   "note.source.url": { de: "Link", en: "Link" },
   "note.source.image": { de: "Foto", en: "Photo" },
+  "graph.title": { de: "Wissensnetz", en: "Knowledge graph" },
+  "graph.showTags": { de: "Tags anzeigen", en: "Show tags" },
+  "graph.hideOrphans": { de: "Unverbundene ausblenden", en: "Hide unlinked" },
+  "graph.fit": { de: "Ansicht einpassen", en: "Fit view" },
+  "graph.stats": {
+    de: "{notes} Notizen · {links} Verbindungen",
+    en: "{notes} notes · {links} links",
+  },
+  "graph.aria": {
+    de: "Interaktives Netz aus Notizen, Verlinkungen und Tags",
+    en: "Interactive network of notes, links and tags",
+  },
+  "graph.hint": {
+    de: "Ziehen verschiebt, Scrollen/Kneifen zoomt, Klick öffnet die Notiz, Doppelklick passt die Ansicht ein.",
+    en: "Drag to pan, scroll or pinch to zoom, click opens the note, double-click fits the view.",
+  },
+  "graph.empty.title": { de: "Noch kein Netz", en: "No graph yet" },
+  "graph.empty.text": {
+    de: "Lege Notizen an und lass die KI sie veredeln — Verlinkungen und Tags erscheinen hier als Wissensnetz.",
+    en: "Create notes and let the AI refine them — links and tags will appear here as a knowledge graph.",
+  },
+  "notes.graph": { de: "Wissensnetz öffnen", en: "Open knowledge graph" },
   "noteEditor.createTitle": { de: "Notiz anlegen", en: "Create note" },
   "noteEditor.editTitle": { de: "Notiz bearbeiten", en: "Edit note" },
   "noteEditor.content": { de: "Inhalt", en: "Content" },
@@ -455,6 +477,7 @@ const messages = {
   // Navigation & insight panel
   "nav.today": { de: "Heute", en: "Today" },
   "nav.notes": { de: "Notizen", en: "Notes" },
+  "nav.graph": { de: "Netz", en: "Graph" },
   "nav.projects": { de: "Projekte", en: "Projects" },
   "nav.inbox": { de: "Inbox", en: "Inbox" },
   "nav.search": { de: "Suche", en: "Search" },

@@ -6,6 +6,7 @@ import {
   Plus,
   Search,
   StickyNote,
+  Waypoints,
 } from "lucide-react";
 import { cx } from "@/components/app-helpers";
 import type { Screen } from "@/components/app-types";
@@ -100,6 +101,7 @@ export function DesktopSidebar({
   const items = [
     { screen: "today" as Screen, label: t("nav.today"), icon: Home },
     { screen: "notes" as Screen, label: t("nav.notes"), icon: StickyNote },
+    { screen: "graph" as Screen, label: t("nav.graph"), icon: Waypoints },
     { screen: "projects" as Screen, label: t("nav.projects"), icon: ClipboardList },
     {
       screen: "inbox" as Screen,

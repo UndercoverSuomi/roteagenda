@@ -7,7 +7,7 @@ This version has breaking changes — APIs, conventions, and file structure may 
 # Projektstruktur
 
 - `src/components/rote-agenda-app.tsx` — Haupt-Orchestrator: gesamter App-State, Handler und Screen-Weiche. Screens werden über einen `screen`-State gewechselt, nicht über Routen.
-- `src/components/screens/` — eine Datei pro Screen (auth, welcome, today, notes, note-detail, capture, inbox, projects, project-detail, task-detail, search, more). Screens sind zustandsarm; Daten und Callbacks kommen als Props aus dem Orchestrator.
+- `src/components/screens/` — eine Datei pro Screen (auth, welcome, today, notes, note-detail, graph, capture, inbox, projects, project-detail, task-detail, search, more). Screens sind zustandsarm; Daten und Callbacks kommen als Props aus dem Orchestrator. Der Graph-Screen zeichnet das Wissensnetz per Canvas; die pure Graph-/Layout-Logik liegt in `src/lib/graph.ts`.
 - `src/components/editors/` — Modal-Editoren für Notizen, Aufgaben und Projekte.
 - `src/components/ui/` — wiederverwendbare Bausteine (primitives, controls, task-items, suggestion-card, navigation, insight-panel, google-section).
 - `src/components/app-types.ts` / `app-helpers.ts` — gemeinsame UI-Typen, Label-Maps und pure Helfer.

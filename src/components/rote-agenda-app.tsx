@@ -24,6 +24,7 @@ import { ProjectEditor } from "@/components/editors/project-editor";
 import { TaskEditor } from "@/components/editors/task-editor";
 import { AuthScreen } from "@/components/screens/auth-screen";
 import { CaptureScreen } from "@/components/screens/capture-screen";
+import { GraphScreen } from "@/components/screens/graph-screen";
 import { InboxScreen } from "@/components/screens/inbox-screen";
 import { MoreScreen } from "@/components/screens/more-screen";
 import { NoteDetailScreen } from "@/components/screens/note-detail-screen";
@@ -1482,10 +1483,23 @@ export function RoteAgendaApp() {
           t={t}
           onOpenNote={openNote}
           onCreateNote={createBlankNote}
+          onOpenGraph={() => navigate("graph")}
           onTogglePin={toggleNotePin}
           onImportUrlChange={setNoteImportUrl}
           onImportUrl={() => void handleImportUrl()}
           onImportImage={(file) => void handleImportImage(file)}
+        />
+      );
+    }
+
+    if (screen === "graph") {
+      return (
+        <GraphScreen
+          notes={data.notes}
+          projects={data.projects}
+          t={t}
+          onBack={() => navigate("notes")}
+          onOpenNote={openNote}
         />
       );
     }

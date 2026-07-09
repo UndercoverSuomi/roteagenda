@@ -13,6 +13,7 @@ Die Oberflaeche ist zuerst als responsives Webtool gedacht: schnell am Handy erf
 - Klingt etwas nach einem Termin ("Arzttermin Praxis41 morgen um 9"), schlaegt die KI einen Kalendereintrag mit Uhrzeit vor — Uebernahme geht an den Google Kalender — plus sinnvolle Vorbereitungs-Aufgaben als eigene Vorschlaege
 - Aufgabenvorschlaege pruefen, bearbeiten, uebernehmen oder ignorieren; die KI kennt Projekte und offene Aufgaben und schlaegt keine Duplikate vor
 - Notizen pinnen, taggen, durchsuchen und ueber verlinkte Notizen navigieren
+- Wissensnetz: alle Notizen als interaktiver Graph (wie in Obsidian) — Verlinkungen als Kanten, Tags optional als Themen-Knoten, Projektfarben, Zoom/Pan, Klick oeffnet die Notiz
 - Tagesbriefing auf dem Heute-Screen: die KI fasst Ueberfaelliges und heute Faelliges kurz zusammen
 - Aufgaben abhaken, bearbeiten, per Schnellauswahl verschieben (heute/morgen/naechste Woche), Projekte anlegen und verwalten
 - Suche ueber Aufgaben, Projekte und Notizen (inkl. Tags und KI-Fassung)
