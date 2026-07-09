@@ -88,7 +88,12 @@ const functionConfig = {
   enabled: true,
   logging: true,
   execute: [],
-  events: [`databases.${DATABASE_ID}.collections.${NOTES_COLLECTION_ID}.documents.*.create`],
+  // Die App legt Notizen über die Sync-Queue per Upsert an; Appwrite feuert
+  // dafür ein eigenes .upsert-Event (kein .create) — deshalb beide abonnieren.
+  events: [
+    `databases.${DATABASE_ID}.collections.${NOTES_COLLECTION_ID}.documents.*.create`,
+    `databases.${DATABASE_ID}.collections.${NOTES_COLLECTION_ID}.documents.*.upsert`,
+  ],
   scopes: [
     "users.read",
     "databases.read",
