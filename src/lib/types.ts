@@ -60,6 +60,9 @@ export interface Note {
   // Storage-Datei-ID eines hochgeladenen Fotos bzw. letzte Fehlermeldung.
   pendingFileId: string | null;
   processingError: string | null;
+  // Dauerhaft angehängtes Foto (noteMedia-Bucket); bleibt nach der
+  // Analyse erhalten und wird in der Detailansicht angezeigt.
+  mediaFileId: string | null;
   createdAt: string;
   updatedAt: string;
 }

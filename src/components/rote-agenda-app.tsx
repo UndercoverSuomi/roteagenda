@@ -650,6 +650,7 @@ export function RoteAgendaApp() {
       processed: false,
       pendingFileId: null,
       processingError: null,
+      mediaFileId: null,
       createdAt: now,
       updatedAt: now,
     });
@@ -726,6 +727,8 @@ export function RoteAgendaApp() {
       processed: false,
       pendingFileId: input.pendingFileId,
       processingError: null,
+      // Hochgeladene Fotos bleiben dauerhaft an der Notiz.
+      mediaFileId: input.pendingFileId,
       createdAt: now,
       updatedAt: now,
     };
@@ -825,6 +828,7 @@ export function RoteAgendaApp() {
       processed: false,
       pendingFileId: null,
       processingError: null,
+      mediaFileId: null,
       createdAt: now,
       updatedAt: now,
     };

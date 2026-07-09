@@ -131,7 +131,6 @@ export default async ({ req, res, log, error }: Context) => {
         processingError: resolved.error.slice(0, 1000),
         updatedAt: now(),
       });
-      await cleanupFile(storage, doc);
       return res.json({ ok: false, stored: true, reason: "kein KI-Key" });
     }
 
@@ -208,7 +207,6 @@ export default async ({ req, res, log, error }: Context) => {
       }
     }
 
-    await cleanupFile(storage, doc);
     log(`Fertig: ${suggestions.length} Vorschläge`);
     return res.json({ ok: true, suggestions: suggestions.length });
   } catch (workerError) {
@@ -227,9 +225,9 @@ export default async ({ req, res, log, error }: Context) => {
     } catch (updateError) {
       error(`Fehlerstatus konnte nicht gespeichert werden: ${String(updateError)}`);
     }
-    await cleanupFile(storage, doc);
 
     // 200 zurückgeben: Der Fehler steht in der Notiz, kein Event-Retry nötig.
+    // Das Foto bleibt erhalten — die Notiz zeigt es auch ohne Analyse.
     return res.json({ ok: false, error: message });
   }
 };
@@ -351,8 +349,15 @@ async function buildUrlContent(
   return { content, title: title ?? "" };
 }
 
+// Angehängte Fotos leben so lange wie ihre Notiz — gelöscht wird nur
+// beim Delete-Event, damit keine verwaisten Dateien zurückbleiben.
 async function cleanupFile(storage: Storage, doc: Record<string, unknown>) {
-  const fileId = typeof doc.pendingFileId === "string" ? doc.pendingFileId : "";
+  const fileId =
+    typeof doc.mediaFileId === "string" && doc.mediaFileId
+      ? doc.mediaFileId
+      : typeof doc.pendingFileId === "string"
+        ? doc.pendingFileId
+        : "";
   if (!fileId) return;
   try {
     await storage.deleteFile(BUCKET_ID, fileId);

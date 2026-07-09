@@ -1,5 +1,6 @@
 import { ArrowLeft, Edit3, Loader2, Pin, Sparkles } from "lucide-react";
 import { cx, isNotePending, noteDisplayTitle } from "@/components/app-helpers";
+import { NoteImage } from "@/components/ui/note-image";
 import { ScreenHeader } from "@/components/ui/primitives";
 import { TaskLine } from "@/components/ui/task-items";
 import { formatDateLabel } from "@/lib/date";
@@ -111,6 +112,8 @@ export function NoteDetailScreen({
           ))}
         </div>
       ) : null}
+
+      {note.mediaFileId ? <NoteImage fileId={note.mediaFileId} t={t} /> : null}
 
       <div className="mt-6 space-y-6">
         {pending ? (

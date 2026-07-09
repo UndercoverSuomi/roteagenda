@@ -253,6 +253,11 @@ const messages = {
     en: "{count} new suggestions are waiting in the inbox.",
   },
   "note.openInbox": { de: "Zur Inbox", en: "Open inbox" },
+  "note.photoAlt": { de: "Angehängtes Foto", en: "Attached photo" },
+  "note.photoOpen": {
+    de: "Foto in Großansicht öffnen",
+    en: "Open photo in full view",
+  },
   "note.source.manual": { de: "Manuell", en: "Manual" },
   "note.source.capture": { de: "Schnellnotiz", en: "Quick capture" },
   "note.source.url": { de: "Link", en: "Link" },

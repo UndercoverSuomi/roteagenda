@@ -62,6 +62,7 @@ function restoreNullableFields(key: CollectionKey, item: Record<string, unknown>
     data.pinned ??= false;
     data.pendingFileId ??= null;
     data.processingError ??= null;
+    data.mediaFileId ??= null;
     data.updatedAt ??= data.createdAt ?? "";
   }
 

@@ -1044,7 +1044,6 @@ var main_default = async ({ req, res, log, error }) => {
         processingError: resolved.error.slice(0, 1e3),
         updatedAt: now()
       });
-      await cleanupFile(storage, doc);
       return res.json({ ok: false, stored: true, reason: "kein KI-Key" });
     }
     const marker = userId ? `user:${userId}` : null;
@@ -1109,7 +1108,6 @@ var main_default = async ({ req, res, log, error }) => {
         error(`Vorschlag konnte nicht gespeichert werden: ${String(suggestionError)}`);
       }
     }
-    await cleanupFile(storage, doc);
     log(`Fertig: ${suggestions.length} Vorschl\xE4ge`);
     return res.json({ ok: true, suggestions: suggestions.length });
   } catch (workerError) {
@@ -1124,7 +1122,6 @@ var main_default = async ({ req, res, log, error }) => {
     } catch (updateError) {
       error(`Fehlerstatus konnte nicht gespeichert werden: ${String(updateError)}`);
     }
-    await cleanupFile(storage, doc);
     return res.json({ ok: false, error: message });
   }
 };
@@ -1217,7 +1214,7 @@ Die automatische Video-Analyse war nicht m\xF6glich${detail}.`;
   return { content, title: title ?? "" };
 }
 async function cleanupFile(storage, doc) {
-  const fileId = typeof doc.pendingFileId === "string" ? doc.pendingFileId : "";
+  const fileId = typeof doc.mediaFileId === "string" && doc.mediaFileId ? doc.mediaFileId : typeof doc.pendingFileId === "string" ? doc.pendingFileId : "";
   if (!fileId) return;
   try {
     await storage.deleteFile(BUCKET_ID, fileId);

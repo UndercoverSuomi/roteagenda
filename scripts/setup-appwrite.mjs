@@ -101,6 +101,7 @@ const COLLECTIONS = [
       boolean("pinned", false),
       string("pendingFileId", 64, false),
       string("processingError", 1024, false),
+      string("mediaFileId", 64, false),
       string("createdAt", 32),
       string("updatedAt", 32, false),
     ],
