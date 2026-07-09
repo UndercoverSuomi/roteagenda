@@ -708,3 +708,21 @@ test("graph insights disable reasoning only for openrouter", async () => {
   assert.deepEqual(bodies[0].reasoning, { enabled: false });
   assert.equal(bodies[1].reasoning, undefined);
 });
+
+test("enhancement prompt demands at least three tags", async () => {
+  const calls = [];
+  await callEnhanceProvider({
+    config: GLM_TEST_CONFIG,
+    noteId: "note-1",
+    content: "Kurze Notiz",
+    projects: [],
+    fetchFn: async (url, init) => {
+      calls.push(JSON.parse(init.body));
+      return chatReply(enhancementPayload());
+    },
+  });
+
+  const prompt = calls[0].messages[1].content;
+  assert.match(prompt, /3 bis 5/);
+  assert.match(prompt, /mindestens 3/);
+});

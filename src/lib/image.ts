@@ -35,6 +35,11 @@ export async function fileToJpegBlob(
       throw new Error("Bildverarbeitung wird von diesem Browser nicht unterstützt.");
     }
 
+    // JPEG kennt keine Transparenz — ohne Füllung würden transparente
+    // PNG-Bereiche (Screenshots, Diagramme) schwarz. Weiß ist zudem der
+    // beste Kontrast für die Texterkennung.
+    context.fillStyle = "#ffffff";
+    context.fillRect(0, 0, width, height);
     context.drawImage(bitmap, 0, 0, width, height);
 
     const blob = await new Promise<Blob | null>((resolve) =>
