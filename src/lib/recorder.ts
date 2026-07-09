@@ -20,18 +20,26 @@ export type ActiveRecording = {
 
 export async function startRecording(): Promise<ActiveRecording> {
   const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-  const recorder = new MediaRecorder(stream);
   const chunks: Blob[] = [];
-
-  recorder.ondataavailable = (event) => {
-    if (event.data.size) chunks.push(event.data);
-  };
-  recorder.start();
 
   function cleanup() {
     for (const track of stream.getTracks()) {
       track.stop();
     }
+  }
+
+  let recorder: MediaRecorder;
+  try {
+    recorder = new MediaRecorder(stream);
+    recorder.ondataavailable = (event) => {
+      if (event.data.size) chunks.push(event.data);
+    };
+    recorder.start();
+  } catch (error) {
+    // Startet der Recorder gar nicht erst, hat der Aufrufer keine Referenz
+    // zum Aufräumen — das Mikrofon muss hier wieder freigegeben werden.
+    cleanup();
+    throw error;
   }
 
   return {

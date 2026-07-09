@@ -4,6 +4,7 @@ import { X } from "lucide-react";
 import { useState } from "react";
 import { cx } from "@/components/app-helpers";
 import { Field } from "@/components/ui/primitives";
+import { useDialog } from "@/components/ui/use-dialog";
 import type { MessageKey, Translator } from "@/lib/i18n";
 import { PROJECT_COLORS } from "@/lib/project-colors";
 import type { Project } from "@/lib/types";
@@ -28,6 +29,8 @@ export function ProjectEditor({
   const [draft, setDraft] = useState(project);
   const [keywordsText, setKeywordsText] = useState(project.keywords.join(", "));
   const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const panelRef = useDialog<HTMLDivElement>(onClose);
+  const heading = isNew ? t("projectEditor.createTitle") : t("projectEditor.editTitle");
   const inputClass =
     "h-11 w-full rounded-[5px] border border-[var(--line)] bg-[var(--field)] px-3 text-[13px] outline-none";
 
@@ -51,11 +54,16 @@ export function ProjectEditor({
 
   return (
     <div className="fixed inset-0 z-50 grid place-items-end bg-black/35 p-0 md:place-items-center md:p-6">
-      <div className="w-full max-w-[430px] rounded-t-[18px] bg-[var(--paper-soft)] p-6 shadow-2xl md:rounded-[18px]">
+      <div
+        ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label={heading}
+        tabIndex={-1}
+        className="w-full max-w-[430px] rounded-t-[18px] bg-[var(--paper-soft)] p-6 shadow-2xl outline-none md:rounded-[18px]"
+      >
         <div className="flex items-center justify-between">
-          <h2 className="font-display text-[22px] font-bold">
-            {isNew ? t("projectEditor.createTitle") : t("projectEditor.editTitle")}
-          </h2>
+          <h2 className="font-display text-[22px] font-bold">{heading}</h2>
           <button
             type="button"
             onClick={onClose}

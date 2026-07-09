@@ -39,11 +39,28 @@ export function applyRealtimeEvent(
   }
 
   // Echo der eigenen Schreibzugriffe: unverändert → gleiche Referenz zurück.
-  if (JSON.stringify(list[index]) === JSON.stringify(item)) return data;
+  // Der Vergleich muss die Schlüssel-Reihenfolge ignorieren, weil lokal
+  // gebaute Objekte und Appwrite-Dokumente ihre Felder anders ordnen.
+  if (stableStringify(list[index]) === stableStringify(item)) return data;
 
   const nextList = [...list];
   nextList[index] = item;
   return { ...data, [key]: nextList } as AppData;
+}
+
+function stableStringify(value: unknown): string {
+  return JSON.stringify(sortKeysDeep(value));
+}
+
+function sortKeysDeep(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(sortKeysDeep);
+  if (!isRecord(value)) return value;
+
+  return Object.fromEntries(
+    Object.keys(value)
+      .sort()
+      .map((key) => [key, sortKeysDeep(value[key])]),
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

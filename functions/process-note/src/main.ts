@@ -155,7 +155,7 @@ export default async ({ req, res, log, error }: Context) => {
       })),
       openTasks: tasks
         .filter((task) => task.status !== "done")
-        .slice(0, 120)
+        .slice(0, 150)
         .map((task) => ({
           title: String(task.title ?? ""),
           projectId: typeof task.projectId === "string" ? task.projectId : null,
@@ -163,14 +163,17 @@ export default async ({ req, res, log, error }: Context) => {
         })),
       existingTags: Array.from(
         new Set(notes.flatMap((note) => (Array.isArray(note.tags) ? note.tags : []))),
-      ).slice(0, 40) as string[],
+      ).slice(0, 120) as string[],
+      // Alle Notizen als Verlinkungs-Kandidaten (bis zur Prompt-Grenze),
+      // mit Inhalts-Snippet — identisch zur App-seitigen Veredelung.
       otherNotes: notes
         .filter((note) => note.$id !== noteId)
-        .slice(0, 60)
+        .slice(0, 250)
         .map((note) => ({
           id: String(note.id ?? note.$id),
           title: String(note.title || String(note.content ?? "").slice(0, 60)),
           tags: Array.isArray(note.tags) ? (note.tags as string[]) : [],
+          snippet: String(note.enhanced || note.content || "").slice(0, 200),
         })),
       locale,
     });

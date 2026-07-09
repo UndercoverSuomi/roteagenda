@@ -52,11 +52,14 @@ export type OpenTaskContext = {
   dueDate: string | null;
 };
 
-// Kandidaten für die Notiz-Verlinkung.
+// Kandidaten für die Notiz-Verlinkung. Der Snippet gibt der KI genug
+// Inhalt, um thematische Bezüge zu erkennen — Titel und Tags allein
+// reichen für ein brauchbares Wissensnetz nicht.
 export type NoteLinkCandidate = {
   id: string;
   title: string;
   tags: string[];
+  snippet?: string;
 };
 
 type EnhanceNoteParams = {
@@ -391,7 +394,7 @@ export async function enhanceNoteWithProvider(
 }
 
 const MAX_TAGS = 6;
-const MAX_RELATED_NOTES = 5;
+const MAX_RELATED_NOTES = 8;
 
 export function buildNoteEnhancementFromProviderText({
   providerText,
@@ -608,11 +611,14 @@ function describeToday(todayIso: string | undefined, locale: Locale) {
 const JSON_SHAPE =
   '{"title":"...","enhanced":"...","tags":["tag1","tag2"],"projectId":"project-id | null","relatedNoteIds":["note-id"],"suggestions":[{"kind":"task | event","suggestedTitle":"...","suggestedDescription":"...","suggestedProjectId":"project-id | null","suggestedNewProjectTitle":"... | null","confidence":0.0,"priority":"low|medium|high","dueDate":"YYYY-MM-DD | null","eventStart":"YYYY-MM-DDTHH:MM | null","eventEnd":"YYYY-MM-DDTHH:MM | null","reasoning":"...","needsReview":true}]}';
 
-// Obergrenzen, damit der Prompt bei großen Datenmengen kompakt bleibt.
-const MAX_PROMPT_TASKS = 120;
+// Obergrenzen, damit der Prompt auch bei großen Datenmengen beherrschbar
+// bleibt. Bewusst großzügig: Tags und Verlinkungen sollen den GESAMTEN
+// Notizbestand kennen, damit ein konsistentes Wissensnetz entsteht.
+const MAX_PROMPT_TASKS = 150;
 const MAX_PROMPT_TASK_TITLE = 120;
-const MAX_PROMPT_NOTES = 60;
-const MAX_PROMPT_TAGS = 40;
+const MAX_PROMPT_NOTES = 250;
+const MAX_PROMPT_TAGS = 120;
+const MAX_PROMPT_SNIPPET = 160;
 
 function compactOpenTasks(openTasks: OpenTaskContext[]) {
   return openTasks.slice(0, MAX_PROMPT_TASKS).map((task) => ({
@@ -627,6 +633,9 @@ function compactNoteCandidates(notes: NoteLinkCandidate[]) {
     id: note.id,
     title: note.title.slice(0, MAX_PROMPT_TASK_TITLE),
     tags: note.tags.slice(0, MAX_TAGS),
+    ...(note.snippet?.trim()
+      ? { snippet: note.snippet.trim().slice(0, MAX_PROMPT_SNIPPET) }
+      : {}),
   }));
 }
 
@@ -660,9 +669,9 @@ function buildEnhancePrompt(
       "About the note itself:",
       "- title: a concise heading (max 60 characters).",
       "- enhanced: the note rewritten cleanly and well structured. Preserve the content, invent nothing. Plain text with paragraphs and simple dashes, no markdown syntax.",
-      "- tags: 1 to 5 short lowercase keywords; prefer existing tags when they fit.",
+      "- tags: 1 to 5 short lowercase keywords. Strongly prefer existing tags when they fit — consistent tags across notes form a knowledge network.",
       "- projectId: the id of the best-fitting enabled project, otherwise null.",
-      "- relatedNoteIds: ids of thematically related notes from the candidate list (max 5), otherwise an empty list.",
+      "- relatedNoteIds: ids of ALL thematically related notes from the candidate list (max 8), otherwise an empty list. These links form a knowledge graph like in Obsidian — be generous with genuine thematic connections (same topic, person, place or project), but never invent links.",
       "About suggestions (0 to 4 entries):",
       '- kind "task": a concrete actionable task from the note. kind "event": an appointment with a recognizable date; set eventStart as local time YYYY-MM-DDTHH:MM (assume 09:00 if no time is given) and dueDate to the same date.',
       "- For an event, also propose sensible preparation tasks as separate task suggestions (e.g. bring documents).",
@@ -672,7 +681,7 @@ function buildEnhancePrompt(
       "Write every text in English.",
       ...(tags.length ? ["Existing tags:", JSON.stringify(tags)] : []),
       ...(noteCandidates.length
-        ? ["Existing notes (id, title, tags):", JSON.stringify(noteCandidates)]
+        ? ["Existing notes (id, title, tags, snippet):", JSON.stringify(noteCandidates)]
         : []),
       ...(existingTasks.length
         ? ["Open tasks (JSON):", JSON.stringify(existingTasks)]
@@ -692,9 +701,9 @@ function buildEnhancePrompt(
     "Zur Notiz selbst:",
     "- title: eine prägnante Überschrift (maximal 60 Zeichen).",
     "- enhanced: die Notiz sauber ausformuliert und gut strukturiert. Inhalt bewahren, nichts dazuerfinden. Reiner Text mit Absätzen und einfachen Spiegelstrichen, keine Markdown-Syntax.",
-    "- tags: 1 bis 5 kurze, kleingeschriebene Schlagwörter; nutze vorhandene Tags, wenn sie passen.",
+    "- tags: 1 bis 5 kurze, kleingeschriebene Schlagwörter. Nutze bevorzugt vorhandene Tags, wenn sie passen — konsistente Tags über alle Notizen bilden ein Wissensnetz.",
     "- projectId: die ID des am besten passenden aktivierten Projekts, sonst null.",
-    "- relatedNoteIds: IDs thematisch verwandter Notizen aus der Kandidatenliste (maximal 5), sonst leere Liste.",
+    "- relatedNoteIds: IDs ALLER thematisch verwandten Notizen aus der Kandidatenliste (maximal 8), sonst leere Liste. Diese Verknüpfungen bilden ein Wissensnetz wie in Obsidian — sei großzügig bei echten thematischen Bezügen (gleiches Thema, Person, Ort oder Projekt), aber erfinde keine.",
     "Zu den Vorschlägen (suggestions, 0 bis 4 Einträge):",
     '- kind "task": eine konkrete Aufgabe aus der Notiz. kind "event": ein Termin mit erkennbarem Datum; setze eventStart als lokale Zeit YYYY-MM-DDTHH:MM (ohne erkennbare Uhrzeit 09:00 annehmen) und dueDate auf dasselbe Datum.',
     "- Zu einem Termin gehören sinnvolle Vorbereitungs-Aufgaben als eigene task-Vorschläge (z. B. Unterlagen mitnehmen).",
@@ -704,7 +713,7 @@ function buildEnhancePrompt(
     "Formuliere alle Texte auf Deutsch.",
     ...(tags.length ? ["Vorhandene Tags:", JSON.stringify(tags)] : []),
     ...(noteCandidates.length
-      ? ["Vorhandene Notizen (id, title, tags):", JSON.stringify(noteCandidates)]
+      ? ["Vorhandene Notizen (id, title, tags, snippet):", JSON.stringify(noteCandidates)]
       : []),
     ...(existingTasks.length
       ? ["Offene Aufgaben (JSON):", JSON.stringify(existingTasks)]

@@ -201,9 +201,9 @@ export function RoteAgendaApp() {
     () =>
       createSyncQueue<SyncOp>({
         execute: (op) => executeSyncOp(op, userIdRef.current),
-        save: (entries) => {
+        save: (entries, ownedIds) => {
           if (userIdRef.current) {
-            writeQueuedOps(userIdRef.current, entries);
+            writeQueuedOps(userIdRef.current, entries, ownedIds);
           }
         },
         onChange: (status, failure, pending) => {
@@ -558,7 +558,7 @@ export function RoteAgendaApp() {
         projects: data.projects,
         openTasks: data.tasks
           .filter((task) => task.status !== "done")
-          .slice(0, 120)
+          .slice(0, 150)
           .map((task) => ({
             title: task.title,
             projectId: task.projectId,
@@ -566,15 +566,18 @@ export function RoteAgendaApp() {
           })),
         existingTags: Array.from(new Set(data.notes.flatMap((note) => note.tags))).slice(
           0,
-          40,
+          120,
         ),
+        // Alle Notizen als Verlinkungs-Kandidaten (bis zur Prompt-Grenze),
+        // mit Inhalts-Snippet — so entsteht ein konsistentes Wissensnetz.
         otherNotes: data.notes
           .filter((note) => note.id !== latest.id)
-          .slice(0, 60)
+          .slice(0, 250)
           .map((note) => ({
             id: note.id,
             title: note.title || note.content.slice(0, 60),
             tags: note.tags,
+            snippet: (note.enhanced || note.content).slice(0, 200),
           })),
         locale,
       });
@@ -876,7 +879,7 @@ export function RoteAgendaApp() {
   }
 
   // Terminvorschlag: an Google Kalender übergeben, keine App-Aufgabe.
-  function acceptEventSuggestion(suggestion: AiSuggestion) {
+  async function acceptEventSuggestion(suggestion: AiSuggestion) {
     if (!suggestion.eventStart) return;
 
     const event = {
@@ -886,22 +889,36 @@ export function RoteAgendaApp() {
       end: suggestion.eventEnd,
     };
 
-    // Vorbefüll-Fenster synchron öffnen (Popup-Blocker); mit Client-ID
-    // läuft die Übergabe direkt über die Google-API.
     if (!isGoogleConfigured) {
       window.open(buildCalendarTemplateUrl(event), "_blank", "noopener");
-    } else {
-      void addEventToGoogleCalendar(event).catch(() => {
-        window.open(buildCalendarTemplateUrl(event), "_blank", "noopener");
-      });
+      markSuggestionAccepted(suggestion);
+      return;
     }
 
-    markSuggestionAccepted(suggestion);
+    // Das Fallback-Fenster muss synchron zur Nutzer-Geste aufgehen: ein
+    // window.open nach dem await würde der Popup-Blocker schlucken und der
+    // Termin ginge still verloren, obwohl der Vorschlag "akzeptiert" wäre.
+    const fallback = window.open("about:blank", "_blank");
+    if (fallback) fallback.opener = null;
+
+    try {
+      await addEventToGoogleCalendar(event);
+      fallback?.close();
+      markSuggestionAccepted(suggestion);
+    } catch {
+      if (fallback) {
+        // API fehlgeschlagen → Vorbefüll-Seite; der Nutzer bestätigt dort.
+        fallback.location.href = buildCalendarTemplateUrl(event);
+        markSuggestionAccepted(suggestion);
+      }
+      // Ohne Fenster (Popup-Blocker) bleibt der Vorschlag offen,
+      // damit ein erneuter Klick es noch einmal versuchen kann.
+    }
   }
 
   function handleSuggestionAccept(suggestion: AiSuggestion, createdBy: "ai" | "user" = "ai") {
     if (suggestion.kind === "event") {
-      acceptEventSuggestion(suggestion);
+      void acceptEventSuggestion(suggestion);
       return;
     }
     acceptSuggestion(suggestion, createdBy);
@@ -913,7 +930,7 @@ export function RoteAgendaApp() {
     let newProject: Project | null = null;
 
     if (!projectId) {
-      projectId = `project-${Date.now().toString(36)}`;
+      projectId = createLocalId("project");
       newProject = {
         id: projectId,
         title: suggestion.suggestedNewProjectTitle ?? t("sugg.newProjectLabel"),
@@ -963,7 +980,14 @@ export function RoteAgendaApp() {
     setActiveSuggestions((current) =>
       current.map((item) => (item.id === suggestion.id ? acceptedSuggestion : item)),
     );
-    goTo("today", { projectId, taskId: task.id });
+    // In der Inbox bleiben, damit sich der Stapel am Stück abarbeiten lässt;
+    // aus der Schnellnotiz heraus zeigt "Heute" die neue Aufgabe.
+    if (screen === "inbox") {
+      setSelectedProjectId(projectId);
+      setSelectedTaskId(task.id);
+    } else {
+      goTo("today", { projectId, taskId: task.id });
+    }
 
     if (newProject) {
       persist(t("entity.projectNew"), {
@@ -1708,6 +1732,7 @@ export function RoteAgendaApp() {
       {editingTask ? (
         <TaskEditor
           task={editingTask}
+          isNew={!data.tasks.some((task) => task.id === editingTask.id)}
           projects={data.projects}
           t={t}
           onClose={() => setEditingTask(null)}

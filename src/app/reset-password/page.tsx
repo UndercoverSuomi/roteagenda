@@ -1,11 +1,14 @@
 import type { Metadata } from "next";
 import { Suspense } from "react";
+import { translate } from "@/lib/i18n";
 import { ResetPasswordForm } from "./reset-password-form";
 
 export const metadata: Metadata = {
   title: "Neues Passwort – Rote Agenda",
 };
 
+// Server Component ohne Zugriff auf die Gerätesprache — wie überall rendert
+// das Server-HTML Deutsch; Überschrift und Formular lokalisieren clientseitig.
 export default function ResetPasswordPage() {
   return (
     <main className="grid min-h-screen place-items-center bg-[var(--paper)] px-6 text-[var(--ink)]">
@@ -13,11 +16,10 @@ export default function ResetPasswordPage() {
         <p className="text-[11px] font-extrabold uppercase tracking-[0.05em] text-[var(--red)]">
           Rote Agenda
         </p>
-        <h1 className="mt-3 font-display text-[30px] font-bold">Neues Passwort setzen</h1>
         <Suspense
           fallback={
             <p className="mt-4 text-[14px] leading-7 text-[var(--muted)]">
-              Link wird geprüft.
+              {translate("de", "reset.checking")}
             </p>
           }
         >

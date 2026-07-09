@@ -49,9 +49,16 @@ export function ResetPasswordForm() {
     }
   }
 
+  // Die Überschrift lebt hier statt in der Server-Page, damit sie der
+  // Gerätesprache folgt (Server-HTML zeigt nur den Suspense-Fallback).
+  const heading = (
+    <h1 className="mt-3 font-display text-[30px] font-bold">{t("reset.title")}</h1>
+  );
+
   if (!isLinkValid) {
     return (
       <>
+        {heading}
         <p className="mt-4 text-[14px] leading-7 text-[var(--muted)]">
           {t("reset.invalid")}
         </p>
@@ -68,6 +75,7 @@ export function ResetPasswordForm() {
   if (phase === "done") {
     return (
       <>
+        {heading}
         <p className="mt-4 text-[14px] leading-7 text-[var(--muted)]">{t("reset.done")}</p>
         <Link
           href="/"
@@ -80,45 +88,48 @@ export function ResetPasswordForm() {
   }
 
   return (
-    <form className="mt-7 space-y-4" onSubmit={handleSubmit}>
-      <label className="block">
-        <span className="mb-1.5 block text-[11px] font-bold uppercase tracking-[0.04em] text-[var(--muted)]">
-          {t("reset.newPassword")}
-        </span>
-        <input
-          type="password"
-          value={password}
-          onChange={(event) => setPassword(event.target.value)}
-          className="h-11 w-full rounded-[5px] border border-[var(--line)] bg-[var(--field)] px-3 text-[13px] outline-none"
-          minLength={8}
-          required
-        />
-      </label>
-      <label className="block">
-        <span className="mb-1.5 block text-[11px] font-bold uppercase tracking-[0.04em] text-[var(--muted)]">
-          {t("reset.repeat")}
-        </span>
-        <input
-          type="password"
-          value={confirmPassword}
-          onChange={(event) => setConfirmPassword(event.target.value)}
-          className="h-11 w-full rounded-[5px] border border-[var(--line)] bg-[var(--field)] px-3 text-[13px] outline-none"
-          minLength={8}
-          required
-        />
-      </label>
-      {error ? (
-        <p className="rounded-[5px] border border-[var(--red)] bg-[var(--surface-strong)] p-3 text-[12px] leading-5 text-[var(--red)]">
-          {error}
-        </p>
-      ) : null}
-      <button
-        type="submit"
-        disabled={phase === "submitting"}
-        className="flex h-12 w-full items-center justify-center rounded-[5px] bg-[var(--red)] px-4 text-[13px] font-bold text-white disabled:opacity-50"
-      >
-        {phase === "submitting" ? t("common.pleaseWait") : t("reset.submit")}
-      </button>
-    </form>
+    <>
+      {heading}
+      <form className="mt-7 space-y-4" onSubmit={handleSubmit}>
+        <label className="block">
+          <span className="mb-1.5 block text-[11px] font-bold uppercase tracking-[0.04em] text-[var(--muted)]">
+            {t("reset.newPassword")}
+          </span>
+          <input
+            type="password"
+            value={password}
+            onChange={(event) => setPassword(event.target.value)}
+            className="h-11 w-full rounded-[5px] border border-[var(--line)] bg-[var(--field)] px-3 text-[13px] outline-none"
+            minLength={8}
+            required
+          />
+        </label>
+        <label className="block">
+          <span className="mb-1.5 block text-[11px] font-bold uppercase tracking-[0.04em] text-[var(--muted)]">
+            {t("reset.repeat")}
+          </span>
+          <input
+            type="password"
+            value={confirmPassword}
+            onChange={(event) => setConfirmPassword(event.target.value)}
+            className="h-11 w-full rounded-[5px] border border-[var(--line)] bg-[var(--field)] px-3 text-[13px] outline-none"
+            minLength={8}
+            required
+          />
+        </label>
+        {error ? (
+          <p className="rounded-[5px] border border-[var(--red)] bg-[var(--surface-strong)] p-3 text-[12px] leading-5 text-[var(--red)]">
+            {error}
+          </p>
+        ) : null}
+        <button
+          type="submit"
+          disabled={phase === "submitting"}
+          className="flex h-12 w-full items-center justify-center rounded-[5px] bg-[var(--red)] px-4 text-[13px] font-bold text-white disabled:opacity-50"
+        >
+          {phase === "submitting" ? t("common.pleaseWait") : t("reset.submit")}
+        </button>
+      </form>
+    </>
   );
 }

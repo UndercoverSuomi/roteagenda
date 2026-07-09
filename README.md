@@ -109,7 +109,7 @@ node scripts/setup-worker.mjs --key=<api-key>
 
 Der API-Key braucht dafuer die Scopes der Kategorie **Functions** (read+write). Das Script legt die Function an (Runtime, Event-Trigger, Timeout 300 s, Scopes), uebernimmt `OPENROUTER_*`-Variablen aus `.env.local` und deployt das Bundle. Der Storage-Bucket `noteMedia` fuer Foto-Uploads entsteht ueber `scripts/setup-appwrite.mjs` (Key braucht dann zusaetzlich **Storage**-Scopes).
 
-### 3. Entwicklung
+### 4. Entwicklung
 
 ```bash
 npm run dev

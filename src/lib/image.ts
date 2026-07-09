@@ -11,9 +11,14 @@ export async function fileToJpegBlob(
 ): Promise<Blob> {
   let bitmap: ImageBitmap;
   try {
-    bitmap = await createImageBitmap(file);
+    // EXIF-Rotation anwenden — Hochformat-Handyfotos kämen sonst gekippt an.
+    bitmap = await createImageBitmap(file, { imageOrientation: "from-image" });
   } catch {
-    throw new Error("Dieses Bildformat wird vom Browser nicht unterstützt.");
+    try {
+      bitmap = await createImageBitmap(file);
+    } catch {
+      throw new Error("Dieses Bildformat wird vom Browser nicht unterstützt.");
+    }
   }
 
   try {

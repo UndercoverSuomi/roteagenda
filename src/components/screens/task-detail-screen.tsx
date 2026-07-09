@@ -108,20 +108,21 @@ export function TaskDetailScreen({
             })}
           </div>
         </div>
-        <label className="mt-5 flex items-center gap-3 rounded-[6px] border border-[var(--line)] bg-[var(--surface)] p-4 text-[14px] font-bold">
-          <button
-            type="button"
-            onClick={onToggleDone}
-            className="grid h-6 w-6 place-items-center text-[var(--red)]"
-          >
+        <button
+          type="button"
+          onClick={onToggleDone}
+          aria-pressed={task.status === "done"}
+          className="mt-5 flex w-full items-center gap-3 rounded-[6px] border border-[var(--line)] bg-[var(--surface)] p-4 text-left text-[14px] font-bold"
+        >
+          <span className="grid h-6 w-6 place-items-center text-[var(--red)]">
             {task.status === "done" ? (
               <CheckSquare2 className="h-5 w-5" />
             ) : (
               <Square className="h-5 w-5" />
             )}
-          </button>
+          </span>
           {t("task.done")}
-        </label>
+        </button>
       </div>
 
       <DetailTabs

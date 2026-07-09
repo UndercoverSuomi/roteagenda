@@ -3,6 +3,8 @@
 import { X } from "lucide-react";
 import { useState } from "react";
 import { Field } from "@/components/ui/primitives";
+import { useDialog } from "@/components/ui/use-dialog";
+import { MAX_NOTE_LENGTH } from "@/lib/ai-models";
 import type { Translator } from "@/lib/i18n";
 import type { Note, Project } from "@/lib/types";
 
@@ -25,6 +27,8 @@ export function NoteEditor({
 }) {
   const [draft, setDraft] = useState(note);
   const [tagsText, setTagsText] = useState(note.tags.join(", "));
+  const panelRef = useDialog<HTMLDivElement>(onClose);
+  const heading = isNew ? t("noteEditor.createTitle") : t("noteEditor.editTitle");
   const inputClass =
     "h-11 w-full rounded-[5px] border border-[var(--line)] bg-[var(--field)] px-3 text-[13px] outline-none";
 
@@ -41,11 +45,16 @@ export function NoteEditor({
 
   return (
     <div className="fixed inset-0 z-50 grid place-items-end bg-black/35 p-0 md:place-items-center md:p-6">
-      <div className="w-full max-w-[430px] rounded-t-[18px] bg-[var(--paper-soft)] p-6 shadow-2xl md:rounded-[18px]">
+      <div
+        ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label={heading}
+        tabIndex={-1}
+        className="w-full max-w-[430px] rounded-t-[18px] bg-[var(--paper-soft)] p-6 shadow-2xl outline-none md:rounded-[18px]"
+      >
         <div className="flex items-center justify-between">
-          <h2 className="font-display text-[22px] font-bold">
-            {isNew ? t("noteEditor.createTitle") : t("noteEditor.editTitle")}
-          </h2>
+          <h2 className="font-display text-[22px] font-bold">{heading}</h2>
           <button
             type="button"
             onClick={onClose}
@@ -69,7 +78,7 @@ export function NoteEditor({
               onChange={(event) =>
                 setDraft((current) => ({ ...current, content: event.target.value }))
               }
-              maxLength={8000}
+              maxLength={MAX_NOTE_LENGTH}
               className="min-h-36 w-full resize-none rounded-[5px] border border-[var(--line)] bg-[var(--field)] px-3 py-3 text-[13px] leading-6 outline-none"
             />
           </Field>

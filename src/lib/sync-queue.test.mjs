@@ -6,6 +6,7 @@ import { createSyncQueue } from "./sync-queue.ts";
 function harness({ failOn = new Set() } = {}) {
   const executed = [];
   const saves = [];
+  const ownedSnapshots = [];
   const states = [];
   const queue = createSyncQueue({
     execute: async (op) => {
@@ -14,12 +15,15 @@ function harness({ failOn = new Set() } = {}) {
       }
       executed.push(op.n);
     },
-    save: (entries) => saves.push(entries.map((entry) => entry.op.n)),
+    save: (entries, ownedIds) => {
+      saves.push(entries.map((entry) => entry.op.n));
+      ownedSnapshots.push(new Set(ownedIds));
+    },
     onChange: (status, failure, pendingCount) =>
       states.push({ status, failure, pendingCount }),
   });
 
-  return { queue, executed, saves, states, failOn };
+  return { queue, executed, saves, ownedSnapshots, states, failOn };
 }
 
 test("executes pushed ops serially and persists the shrinking queue", async () => {
@@ -77,13 +81,29 @@ test("hydrate runs restored ops before ops pushed afterwards", async () => {
   const { queue, executed } = harness();
 
   queue.hydrate([
-    { label: "alt", op: { n: 10 } },
-    { label: "alt", op: { n: 11 } },
+    { id: "op-alt-1", label: "alt", op: { n: 10 } },
+    { id: "op-alt-2", label: "alt", op: { n: 11 } },
   ]);
   queue.push("neu", { n: 12 });
   await queue.flush();
 
   assert.deepEqual(executed, [10, 11, 12]);
+});
+
+test("save exposes every ever-owned id so persistence can merge across tabs", async () => {
+  const { queue, ownedSnapshots } = harness();
+
+  queue.hydrate([{ id: "op-alt-1", label: "alt", op: { n: 10 } }]);
+  queue.push("a", { n: 1 });
+  queue.push("b", { n: 2 });
+  await queue.flush();
+
+  // Auch nach Abarbeitung bleiben alle IDs bekannt — nur so kann die
+  // Persistenz erledigte eigene Einträge aus dem Storage entfernen,
+  // ohne fremde Tabs anzufassen.
+  const owned = ownedSnapshots.at(-1);
+  assert.equal(owned.size, 3);
+  assert.ok(owned.has("op-alt-1"));
 });
 
 test("flush resolves immediately when the queue is idle", async () => {

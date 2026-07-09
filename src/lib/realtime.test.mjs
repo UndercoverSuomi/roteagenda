@@ -72,6 +72,16 @@ test("echoes of unchanged documents return the same state reference", () => {
   assert.equal(next, data);
 });
 
+test("echoes with different key order still return the same reference", () => {
+  const data = applyRealtimeEvent(emptyData(), CREATE, taskDocument());
+  // Lokal gebaute Objekte und Appwrite-Dokumente ordnen Felder verschieden —
+  // der Echo-Vergleich darf davon nicht abhängen.
+  const reordered = Object.fromEntries(Object.entries(taskDocument()).reverse());
+  const next = applyRealtimeEvent(data, UPDATE, reordered);
+
+  assert.equal(next, data);
+});
+
 test("delete events remove the item and ignore unknown ids", () => {
   const data = applyRealtimeEvent(emptyData(), CREATE, taskDocument());
 

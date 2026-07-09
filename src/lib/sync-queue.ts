@@ -2,7 +2,7 @@ export type SyncStatus = "idle" | "saving" | "error";
 
 export type SyncFailure = { label: string; detail: string };
 
-export type QueueEntry<T> = { label: string; op: T };
+export type QueueEntry<T> = { id: string; label: string; op: T };
 
 export type SyncQueue<T> = {
   // Lädt gespeicherte Einträge einer früheren Sitzung an den Anfang der Queue.
@@ -21,16 +21,23 @@ export type SyncQueue<T> = {
 // Daten (kein Closure), damit `save` sie z. B. in localStorage sichern kann
 // und sie einen Reload überleben. Schlägt ein Job fehl, bleibt er samt
 // Nachfolgern in der Queue und kann per retry() erneut laufen.
+//
+// Jeder Eintrag trägt eine eindeutige ID, und `save` bekommt zusätzlich alle
+// IDs, die dieser Queue-Instanz je gehört haben — damit kann die Persistenz
+// Einträge fremder Tabs erhalten, statt sie zu überschreiben.
 export function createSyncQueue<T>({
   execute,
   save,
   onChange,
 }: {
   execute: (op: T) => Promise<void>;
-  save: (entries: QueueEntry<T>[]) => void;
+  save: (entries: QueueEntry<T>[], ownedIds: ReadonlySet<string>) => void;
   onChange: (status: SyncStatus, failure: SyncFailure | null, pendingCount: number) => void;
 }): SyncQueue<T> {
   const queue: QueueEntry<T>[] = [];
+  // Alle je verwalteten Eintrags-IDs (auch erledigte/verworfene) — die
+  // Persistenz entfernt nur diese aus dem gemeinsamen Speicher.
+  const ownedIds = new Set<string>();
   let isRunning = false;
   let waiters: Array<() => void> = [];
 
@@ -39,7 +46,7 @@ export function createSyncQueue<T>({
   }
 
   function persistEntries() {
-    save([...queue]);
+    save([...queue], ownedIds);
   }
 
   function settleWaiters() {
@@ -81,6 +88,9 @@ export function createSyncQueue<T>({
   return {
     hydrate(entries) {
       if (!entries.length) return;
+      for (const entry of entries) {
+        ownedIds.add(entry.id);
+      }
       queue.unshift(...entries);
       persistEntries();
       if (!isRunning) {
@@ -88,7 +98,9 @@ export function createSyncQueue<T>({
       }
     },
     push(label, op) {
-      queue.push({ label, op });
+      const entry = { id: createEntryId(), label, op };
+      ownedIds.add(entry.id);
+      queue.push(entry);
       persistEntries();
       void run();
     },
@@ -124,4 +136,8 @@ export function createSyncQueue<T>({
     },
     pendingCount: () => queue.length,
   };
+}
+
+function createEntryId() {
+  return `op-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }

@@ -38,6 +38,8 @@ export function TaskRow({
       <button
         type="button"
         onClick={onToggle}
+        aria-label={t(task.status === "done" ? "task.markOpen" : "task.markDone")}
+        aria-pressed={task.status === "done"}
         className="grid h-8 w-8 shrink-0 place-items-center text-[var(--red)]"
       >
         {task.status === "done" ? (
@@ -88,17 +90,25 @@ export function TaskRow({
 export function TaskLine({
   task,
   locale,
+  t,
   onOpen,
   onToggle,
 }: {
   task: Task;
   locale: Locale;
+  t: Translator;
   onOpen: () => void;
   onToggle: () => void;
 }) {
   return (
     <div className="flex min-h-[62px] items-center gap-3 py-3">
-      <button type="button" onClick={onToggle} className="text-[var(--red)]">
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-label={t(task.status === "done" ? "task.markOpen" : "task.markDone")}
+        aria-pressed={task.status === "done"}
+        className="text-[var(--red)]"
+      >
         {task.status === "done" ? (
           <CheckSquare2 className="h-5 w-5 fill-[var(--red)] text-white" />
         ) : (

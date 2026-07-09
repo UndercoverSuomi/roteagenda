@@ -114,7 +114,12 @@ export function ScreenHeader({
       )}
     >
       {renderSlot(leftIcon, onLeft, leftSlotClass, leftLabel)}
-      <h1 className="font-display text-[25px] font-bold leading-none">{title}</h1>
+      {title ? (
+        <h1 className="font-display text-[25px] font-bold leading-none">{title}</h1>
+      ) : (
+        // Platzhalter hält die Grid-Spalte, ohne ein leeres Heading zu erzeugen.
+        <span aria-hidden="true" />
+      )}
       {extraRightIcon
         ? renderSlot(extraRightIcon, onExtraRight, rightSlotClass, extraRightLabel)
         : null}

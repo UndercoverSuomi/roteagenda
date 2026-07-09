@@ -49,19 +49,42 @@ export function readQueuedOps(): StoredQueue | null {
   if (typeof value.userId !== "string" || !value.userId) return null;
   if (!Array.isArray(value.entries)) return null;
 
-  const entries = value.entries.filter(
-    (entry): entry is QueueEntry<SyncOp> =>
-      isRecord(entry) &&
-      typeof entry.label === "string" &&
-      isRecord(entry.op) &&
-      typeof entry.op.kind === "string",
-  );
+  const entries = value.entries
+    .filter(
+      (entry): entry is QueueEntry<SyncOp> =>
+        isRecord(entry) &&
+        typeof entry.label === "string" &&
+        isRecord(entry.op) &&
+        typeof entry.op.kind === "string",
+    )
+    // Einträge aus der Zeit vor den Queue-IDs bekommen nachträglich eine.
+    .map((entry) =>
+      typeof entry.id === "string" && entry.id
+        ? entry
+        : { ...entry, id: `op-legacy-${Math.random().toString(36).slice(2, 10)}` },
+    );
 
   return { userId: value.userId, entries };
 }
 
-export function writeQueuedOps(userId: string, entries: QueueEntry<SyncOp>[]) {
-  writeJson(QUEUE_KEY, { userId, entries } satisfies StoredQueue);
+// Mehrere Tabs teilen sich diesen Key. Es werden nur Einträge ersetzt, die
+// dieser Queue-Instanz gehören (ownedIds); fremde Einträge desselben Nutzers
+// bleiben erhalten — sonst würde ein Tab die offline erfassten Änderungen
+// eines anderen Tabs überschreiben. Ein minimales Lese-Schreib-Rennen bleibt
+// (localStorage kennt keine Transaktionen), ist aber um Größenordnungen
+// unwahrscheinlicher als das vorherige Voll-Überschreiben.
+export function writeQueuedOps(
+  userId: string,
+  entries: QueueEntry<SyncOp>[],
+  ownedIds: ReadonlySet<string>,
+) {
+  const stored = readQueuedOps();
+  const foreign =
+    stored && stored.userId === userId
+      ? stored.entries.filter((entry) => !ownedIds.has(entry.id))
+      : [];
+
+  writeJson(QUEUE_KEY, { userId, entries: [...foreign, ...entries] } satisfies StoredQueue);
 }
 
 export function clearQueuedOps() {

@@ -35,7 +35,7 @@ Nur relevant, falls Collections manuell angelegt werden. Textfelder, die leer se
 
 **tasks:** `id` (string, required), `title` (string, required), `description` (string), `projectId` (string, required), `status` (string, required), `priority` (string, required), `dueDate` (string), `sourceNoteId` (string), `createdBy` (string, required), `googleSynced` (string), `createdAt`/`updatedAt` (string, required)
 
-**rawNotes** (app-seitig "Notizen"): `id` (string, required), `content` (string, required), `processed` (boolean, required), `title` (string), `enhanced` (string), `tags` (string array), `projectId` (string), `relatedNoteIds` (string array), `source` (string), `sourceUrl` (string), `pinned` (boolean), `createdAt` (string, required), `updatedAt` (string)
+**rawNotes** (app-seitig "Notizen"): `id` (string, required), `content` (string, required), `processed` (boolean, required), `title` (string), `enhanced` (string, Groesse 20000 → wird als TEXT gespeichert), `tags` (string array), `projectId` (string), `relatedNoteIds` (string array), `source` (string), `sourceUrl` (string), `pinned` (boolean), `pendingFileId` (string), `processingError` (string), `createdAt` (string, required), `updatedAt` (string)
 
 **suggestions:** `id` (string, required), `rawNoteId` (string, required), `kind` (string), `suggestedTitle` (string, required), `suggestedDescription` (string), `suggestedProjectId` (string), `suggestedNewProjectTitle` (string), `confidence` (float, required), `priority` (string, required), `dueDate` (string), `eventStart` (string), `eventEnd` (string), `reasoning` (string), `needsReview` (boolean, required), `state` (string, required), `createdAt` (string, required)
 
@@ -72,7 +72,7 @@ DEEPSEEK_API_KEY=...
 
 Optionale Provider-Overrides (Base-URLs, Modell-Slugs): siehe [.env.example](../.env.example).
 
-Fehlt ein Key fuer das vom Nutzer gewaehlte Modell, gibt `/api/ai/process-note` eine klare Fehlermeldung zurueck. Es gibt keinen Mock-KI-Fallback. Die Route drosselt zusaetzlich auf 20 Anfragen pro Nutzer und 10 Minuten und begrenzt Notizen auf 4000 Zeichen.
+Fehlt ein Key fuer das vom Nutzer gewaehlte Modell, gibt `/api/ai/enhance-note` eine klare Fehlermeldung zurueck. Es gibt keinen Mock-KI-Fallback. Die Route drosselt zusaetzlich auf 20 Anfragen pro Nutzer und 10 Minuten und begrenzt Notizen auf 8000 Zeichen.
 
 ## GitHub Deployment
 

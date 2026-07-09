@@ -2,7 +2,7 @@
 // damit die PWA offline startet. Cross-Origin-Requests (Appwrite, Google)
 // und die KI-Routen unter /api/ werden bewusst nie angefasst.
 
-const CACHE_NAME = "rote-agenda-v1";
+const CACHE_NAME = "rote-agenda-v2";
 const APP_SHELL = "/";
 
 self.addEventListener("install", (event) => {
@@ -26,9 +26,15 @@ self.addEventListener("activate", (event) => {
   );
 });
 
-function isStaticAsset(pathname) {
+// Inhalts-gehashte Build-Dateien ändern sich nie unter derselben URL.
+function isImmutableAsset(pathname) {
+  return pathname.startsWith("/_next/static/");
+}
+
+// Feste URLs, deren Inhalt sich mit einem Deploy ändern kann — die dürfen
+// nicht für immer aus dem Cache kommen.
+function isMutableAsset(pathname) {
   return (
-    pathname.startsWith("/_next/static/") ||
     pathname.startsWith("/icons/") ||
     pathname === "/welcome-movement.png" ||
     pathname === "/favicon.ico" ||
@@ -69,8 +75,8 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // Gehashte Build-Assets und Icons: Cache zuerst, Netz als Fallback.
-  if (isStaticAsset(url.pathname)) {
+  // Gehashte Build-Assets: Cache zuerst, Netz als Fallback.
+  if (isImmutableAsset(url.pathname)) {
     event.respondWith(
       caches.match(request).then(
         (cached) =>
@@ -87,5 +93,28 @@ self.addEventListener("fetch", (event) => {
           }),
       ),
     );
+    return;
+  }
+
+  // Icons/Manifest/Bilder: sofort aus dem Cache antworten, im Hintergrund
+  // aktualisieren (stale-while-revalidate) — so bleiben sie nach einem
+  // Deploy nicht dauerhaft alt.
+  if (isMutableAsset(url.pathname)) {
+    const refresh = fetch(request)
+      .then((response) => {
+        if (response.ok) {
+          const copy = response.clone();
+          caches
+            .open(CACHE_NAME)
+            .then((cache) => cache.put(request, copy))
+            .catch(() => undefined);
+        }
+        return response;
+      });
+
+    event.respondWith(
+      caches.match(request).then((cached) => cached ?? refresh).catch(() => refresh),
+    );
+    event.waitUntil(refresh.catch(() => undefined));
   }
 });

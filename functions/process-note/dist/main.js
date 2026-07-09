@@ -273,7 +273,7 @@ async function enhanceNoteWithProvider(params) {
   throw lastError;
 }
 var MAX_TAGS = 6;
-var MAX_RELATED_NOTES = 5;
+var MAX_RELATED_NOTES = 8;
 function buildNoteEnhancementFromProviderText({
   providerText,
   noteId,
@@ -430,10 +430,11 @@ function describeToday(todayIso, locale) {
   return `${weekday}, ${iso}`;
 }
 var JSON_SHAPE = '{"title":"...","enhanced":"...","tags":["tag1","tag2"],"projectId":"project-id | null","relatedNoteIds":["note-id"],"suggestions":[{"kind":"task | event","suggestedTitle":"...","suggestedDescription":"...","suggestedProjectId":"project-id | null","suggestedNewProjectTitle":"... | null","confidence":0.0,"priority":"low|medium|high","dueDate":"YYYY-MM-DD | null","eventStart":"YYYY-MM-DDTHH:MM | null","eventEnd":"YYYY-MM-DDTHH:MM | null","reasoning":"...","needsReview":true}]}';
-var MAX_PROMPT_TASKS = 120;
+var MAX_PROMPT_TASKS = 150;
 var MAX_PROMPT_TASK_TITLE = 120;
-var MAX_PROMPT_NOTES = 60;
-var MAX_PROMPT_TAGS = 40;
+var MAX_PROMPT_NOTES = 250;
+var MAX_PROMPT_TAGS = 120;
+var MAX_PROMPT_SNIPPET = 160;
 function compactOpenTasks(openTasks) {
   return openTasks.slice(0, MAX_PROMPT_TASKS).map((task) => ({
     title: task.title.slice(0, MAX_PROMPT_TASK_TITLE),
@@ -445,7 +446,8 @@ function compactNoteCandidates(notes) {
   return notes.slice(0, MAX_PROMPT_NOTES).map((note) => ({
     id: note.id,
     title: note.title.slice(0, MAX_PROMPT_TASK_TITLE),
-    tags: note.tags.slice(0, MAX_TAGS)
+    tags: note.tags.slice(0, MAX_TAGS),
+    ...note.snippet?.trim() ? { snippet: note.snippet.trim().slice(0, MAX_PROMPT_SNIPPET) } : {}
   }));
 }
 function buildEnhancePrompt(content, projects, openTasks, existingTags, otherNotes, today, locale) {
@@ -467,9 +469,9 @@ function buildEnhancePrompt(content, projects, openTasks, existingTags, otherNot
       "About the note itself:",
       "- title: a concise heading (max 60 characters).",
       "- enhanced: the note rewritten cleanly and well structured. Preserve the content, invent nothing. Plain text with paragraphs and simple dashes, no markdown syntax.",
-      "- tags: 1 to 5 short lowercase keywords; prefer existing tags when they fit.",
+      "- tags: 1 to 5 short lowercase keywords. Strongly prefer existing tags when they fit \u2014 consistent tags across notes form a knowledge network.",
       "- projectId: the id of the best-fitting enabled project, otherwise null.",
-      "- relatedNoteIds: ids of thematically related notes from the candidate list (max 5), otherwise an empty list.",
+      "- relatedNoteIds: ids of ALL thematically related notes from the candidate list (max 8), otherwise an empty list. These links form a knowledge graph like in Obsidian \u2014 be generous with genuine thematic connections (same topic, person, place or project), but never invent links.",
       "About suggestions (0 to 4 entries):",
       '- kind "task": a concrete actionable task from the note. kind "event": an appointment with a recognizable date; set eventStart as local time YYYY-MM-DDTHH:MM (assume 09:00 if no time is given) and dueDate to the same date.',
       "- For an event, also propose sensible preparation tasks as separate task suggestions (e.g. bring documents).",
@@ -478,7 +480,7 @@ function buildEnhancePrompt(content, projects, openTasks, existingTags, otherNot
       "- If the note contains neither a task nor an event, return an empty suggestions list.",
       "Write every text in English.",
       ...tags.length ? ["Existing tags:", JSON.stringify(tags)] : [],
-      ...noteCandidates.length ? ["Existing notes (id, title, tags):", JSON.stringify(noteCandidates)] : [],
+      ...noteCandidates.length ? ["Existing notes (id, title, tags, snippet):", JSON.stringify(noteCandidates)] : [],
       ...existingTasks.length ? ["Open tasks (JSON):", JSON.stringify(existingTasks)] : [],
       "Enabled projects:",
       JSON.stringify(enabledProjects),
@@ -494,9 +496,9 @@ function buildEnhancePrompt(content, projects, openTasks, existingTags, otherNot
     "Zur Notiz selbst:",
     "- title: eine pr\xE4gnante \xDCberschrift (maximal 60 Zeichen).",
     "- enhanced: die Notiz sauber ausformuliert und gut strukturiert. Inhalt bewahren, nichts dazuerfinden. Reiner Text mit Abs\xE4tzen und einfachen Spiegelstrichen, keine Markdown-Syntax.",
-    "- tags: 1 bis 5 kurze, kleingeschriebene Schlagw\xF6rter; nutze vorhandene Tags, wenn sie passen.",
+    "- tags: 1 bis 5 kurze, kleingeschriebene Schlagw\xF6rter. Nutze bevorzugt vorhandene Tags, wenn sie passen \u2014 konsistente Tags \xFCber alle Notizen bilden ein Wissensnetz.",
     "- projectId: die ID des am besten passenden aktivierten Projekts, sonst null.",
-    "- relatedNoteIds: IDs thematisch verwandter Notizen aus der Kandidatenliste (maximal 5), sonst leere Liste.",
+    "- relatedNoteIds: IDs ALLER thematisch verwandten Notizen aus der Kandidatenliste (maximal 8), sonst leere Liste. Diese Verkn\xFCpfungen bilden ein Wissensnetz wie in Obsidian \u2014 sei gro\xDFz\xFCgig bei echten thematischen Bez\xFCgen (gleiches Thema, Person, Ort oder Projekt), aber erfinde keine.",
     "Zu den Vorschl\xE4gen (suggestions, 0 bis 4 Eintr\xE4ge):",
     '- kind "task": eine konkrete Aufgabe aus der Notiz. kind "event": ein Termin mit erkennbarem Datum; setze eventStart als lokale Zeit YYYY-MM-DDTHH:MM (ohne erkennbare Uhrzeit 09:00 annehmen) und dueDate auf dasselbe Datum.',
     "- Zu einem Termin geh\xF6ren sinnvolle Vorbereitungs-Aufgaben als eigene task-Vorschl\xE4ge (z. B. Unterlagen mitnehmen).",
@@ -505,7 +507,7 @@ function buildEnhancePrompt(content, projects, openTasks, existingTags, otherNot
     "- Enth\xE4lt die Notiz weder Aufgabe noch Termin, gib eine leere suggestions-Liste zur\xFCck.",
     "Formuliere alle Texte auf Deutsch.",
     ...tags.length ? ["Vorhandene Tags:", JSON.stringify(tags)] : [],
-    ...noteCandidates.length ? ["Vorhandene Notizen (id, title, tags):", JSON.stringify(noteCandidates)] : [],
+    ...noteCandidates.length ? ["Vorhandene Notizen (id, title, tags, snippet):", JSON.stringify(noteCandidates)] : [],
     ...existingTasks.length ? ["Offene Aufgaben (JSON):", JSON.stringify(existingTasks)] : [],
     "Aktivierte Projekte:",
     JSON.stringify(enabledProjects),
@@ -1014,18 +1016,21 @@ var main_default = async ({ req, res, log, error }) => {
         keywords: Array.isArray(project.keywords) ? project.keywords : [],
         aiEnabled: project.aiEnabled !== false
       })),
-      openTasks: tasks.filter((task) => task.status !== "done").slice(0, 120).map((task) => ({
+      openTasks: tasks.filter((task) => task.status !== "done").slice(0, 150).map((task) => ({
         title: String(task.title ?? ""),
         projectId: typeof task.projectId === "string" ? task.projectId : null,
         dueDate: typeof task.dueDate === "string" ? task.dueDate : null
       })),
       existingTags: Array.from(
         new Set(notes.flatMap((note) => Array.isArray(note.tags) ? note.tags : []))
-      ).slice(0, 40),
-      otherNotes: notes.filter((note) => note.$id !== noteId).slice(0, 60).map((note) => ({
+      ).slice(0, 120),
+      // Alle Notizen als Verlinkungs-Kandidaten (bis zur Prompt-Grenze),
+      // mit Inhalts-Snippet — identisch zur App-seitigen Veredelung.
+      otherNotes: notes.filter((note) => note.$id !== noteId).slice(0, 250).map((note) => ({
         id: String(note.id ?? note.$id),
         title: String(note.title || String(note.content ?? "").slice(0, 60)),
-        tags: Array.isArray(note.tags) ? note.tags : []
+        tags: Array.isArray(note.tags) ? note.tags : [],
+        snippet: String(note.enhanced || note.content || "").slice(0, 200)
       })),
       locale
     });

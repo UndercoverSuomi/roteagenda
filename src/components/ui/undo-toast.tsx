@@ -11,7 +11,11 @@ export function UndoToast({
 }) {
   return (
     <div className="pointer-events-none fixed inset-x-0 bottom-[104px] z-[60] flex justify-center px-6 md:bottom-8">
-      <div className="pointer-events-auto flex items-center gap-4 rounded-[6px] bg-[var(--green)] px-4 py-3 text-[13px] text-white shadow-lg shadow-black/25">
+      <div
+        role="status"
+        aria-live="polite"
+        className="pointer-events-auto flex items-center gap-4 rounded-[6px] bg-[var(--green)] px-4 py-3 text-[13px] text-white shadow-lg shadow-black/25"
+      >
         <span>{message}</span>
         <button
           type="button"

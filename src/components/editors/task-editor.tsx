@@ -3,11 +3,13 @@
 import { X } from "lucide-react";
 import { useState } from "react";
 import { Field } from "@/components/ui/primitives";
+import { useDialog } from "@/components/ui/use-dialog";
 import type { Translator } from "@/lib/i18n";
 import type { Project, Task, TaskPriority, TaskStatus } from "@/lib/types";
 
 export function TaskEditor({
   task,
+  isNew,
   projects,
   t,
   onClose,
@@ -15,6 +17,7 @@ export function TaskEditor({
   onSave,
 }: {
   task: Task;
+  isNew: boolean;
   projects: Project[];
   t: Translator;
   onClose: () => void;
@@ -22,6 +25,7 @@ export function TaskEditor({
   onSave: (task: Task) => void;
 }) {
   const [draft, setDraft] = useState(task);
+  const panelRef = useDialog<HTMLDivElement>(onClose);
   const inputClass =
     "h-11 w-full rounded-[5px] border border-[var(--line)] bg-[var(--field)] px-3 text-[13px] outline-none";
   const smallInputClass =
@@ -29,7 +33,14 @@ export function TaskEditor({
 
   return (
     <div className="fixed inset-0 z-50 grid place-items-end bg-black/35 p-0 md:place-items-center md:p-6">
-      <div className="w-full max-w-[430px] rounded-t-[18px] bg-[var(--paper-soft)] p-6 shadow-2xl md:rounded-[18px]">
+      <div
+        ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label={t("taskEditor.title")}
+        tabIndex={-1}
+        className="w-full max-w-[430px] rounded-t-[18px] bg-[var(--paper-soft)] p-6 shadow-2xl outline-none md:rounded-[18px]"
+      >
         <div className="flex items-center justify-between">
           <h2 className="font-display text-[22px] font-bold">{t("taskEditor.title")}</h2>
           <button
@@ -127,13 +138,15 @@ export function TaskEditor({
           >
             {t("common.save")}
           </button>
-          <button
-            type="button"
-            onClick={() => onDelete(draft.id)}
-            className="rounded-[5px] border border-[var(--line-strong)] px-3 py-3 text-[13px] font-bold text-[var(--red)]"
-          >
-            {t("common.delete")}
-          </button>
+          {!isNew ? (
+            <button
+              type="button"
+              onClick={() => onDelete(draft.id)}
+              className="rounded-[5px] border border-[var(--line-strong)] px-3 py-3 text-[13px] font-bold text-[var(--red)]"
+            >
+              {t("common.delete")}
+            </button>
+          ) : null}
         </div>
       </div>
     </div>

@@ -241,6 +241,7 @@ export function NoteDetailScreen({
                   key={task.id}
                   task={task}
                   locale={locale}
+                  t={t}
                   onOpen={() => onOpenTask(task.id)}
                   onToggle={() => onToggleTask(task.id)}
                 />

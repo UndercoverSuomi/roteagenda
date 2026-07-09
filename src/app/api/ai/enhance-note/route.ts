@@ -33,8 +33,11 @@ const enforceRateLimit = createRateLimiter(10 * 60_000, 20);
 // dem content-Attribut in Appwrite.
 const MAX_CONTENT_LENGTH = 8000;
 const MAX_OPEN_TASKS = 150;
-const MAX_OTHER_NOTES = 80;
-const MAX_EXISTING_TAGS = 60;
+// Großzügig, damit Tags/Verlinkung den gesamten Notizbestand kennen;
+// die Prompt-Kappung in ai-server.ts begrenzt zusätzlich.
+const MAX_OTHER_NOTES = 250;
+const MAX_EXISTING_TAGS = 120;
+const MAX_SNIPPET_LENGTH = 300;
 
 type RequestProject = Pick<
   Project,
@@ -219,6 +222,10 @@ function readOtherNotes(value: unknown): NoteLinkCandidate[] {
         tags: Array.isArray(item.tags)
           ? item.tags.filter((tag): tag is string => typeof tag === "string")
           : [],
+        snippet:
+          typeof item.snippet === "string"
+            ? item.snippet.slice(0, MAX_SNIPPET_LENGTH)
+            : "",
       },
     ];
   });
