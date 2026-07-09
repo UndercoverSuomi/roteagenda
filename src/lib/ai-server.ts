@@ -72,6 +72,7 @@ type EnhanceNoteParams = {
   otherNotes?: NoteLinkCandidate[];
   today?: string;
   locale?: Locale;
+  timeoutMs?: number;
   fetchFn?: typeof fetch;
 };
 
@@ -272,7 +273,47 @@ export function extractProviderText(payload: unknown): string {
 }
 
 type ProviderMessages = { system?: string; user: string };
-type ProviderRequestOptions = { maxTokens: number; json: boolean };
+type ProviderRequestOptions = {
+  maxTokens: number;
+  json: boolean;
+  timeoutMs?: number;
+  // Reasoning-Modelle "denken" bei Strukturaufgaben sonst zig Sekunden
+  // (gemessen: 20 s → 5 s). Wirkt nur über OpenRouter.
+  noReasoning?: boolean;
+};
+
+// Die Appwrite-Site kappt Requests nach ~30 s — ohne eigenes Timeout stirbt
+// eine Route dann mit einem nackten 500 statt einer verständlichen Meldung.
+// Der Worker (300-s-Function) übergibt eigene, großzügigere Budgets.
+const DEFAULT_PROVIDER_TIMEOUT_MS = 25_000;
+
+// name-basiert statt instanceof: Node-DOMExceptions erben nicht von Error.
+function mapTimeoutError(error: unknown): unknown {
+  const name =
+    typeof error === "object" && error !== null && "name" in error
+      ? String((error as { name: unknown }).name)
+      : "";
+
+  if (name === "TimeoutError" || name === "AbortError") {
+    return new Error(
+      "Die KI-Antwort hat zu lange gedauert. Bitte versuche es erneut — bei Fotos hilft ein kleinerer Ausschnitt, bei Videos ein kürzeres Video.",
+    );
+  }
+  return error;
+}
+
+async function fetchWithTimeout(
+  fetchFn: typeof fetch,
+  url: string,
+  init: RequestInit,
+  timeoutMs: number,
+) {
+  try {
+    return await fetchFn(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
+  } catch (error) {
+    throw mapTimeoutError(error);
+  }
+}
 
 // Gemeinsamer Provider-Aufruf für Notiz-Verarbeitung und Briefing.
 async function requestProvider(
@@ -281,26 +322,33 @@ async function requestProvider(
   options: ProviderRequestOptions,
   fetchFn: typeof fetch,
 ) {
+  const timeoutMs = options.timeoutMs ?? DEFAULT_PROVIDER_TIMEOUT_MS;
+
   if (config.provider === "openai-responses") {
     const input = messages.system
       ? `${messages.system}\n\n${messages.user}`
       : messages.user;
 
-    return fetchFn("https://api.openai.com/v1/responses", {
-      method: "POST",
-      headers: providerHeaders(config.apiKey),
-      body: JSON.stringify({
-        model: config.model,
-        input: [
-          {
-            role: "user",
-            content: input,
-          },
-        ],
-        max_output_tokens: options.maxTokens,
-        ...(options.json ? { text: { format: { type: "json_object" } } } : {}),
-      }),
-    });
+    return fetchWithTimeout(
+      fetchFn,
+      "https://api.openai.com/v1/responses",
+      {
+        method: "POST",
+        headers: providerHeaders(config.apiKey),
+        body: JSON.stringify({
+          model: config.model,
+          input: [
+            {
+              role: "user",
+              content: input,
+            },
+          ],
+          max_output_tokens: options.maxTokens,
+          ...(options.json ? { text: { format: { type: "json_object" } } } : {}),
+        }),
+      },
+      timeoutMs,
+    );
   }
 
   if (!config.baseUrl) {
@@ -313,16 +361,24 @@ async function requestProvider(
   }
   chatMessages.push({ role: "user", content: messages.user });
 
-  return fetchFn(joinUrl(config.baseUrl, "chat/completions"), {
-    method: "POST",
-    headers: providerHeaders(config.apiKey),
-    body: JSON.stringify({
-      model: config.model,
-      messages: chatMessages,
-      max_tokens: options.maxTokens,
-      ...(options.json ? { response_format: { type: "json_object" } } : {}),
-    }),
-  });
+  return fetchWithTimeout(
+    fetchFn,
+    joinUrl(config.baseUrl, "chat/completions"),
+    {
+      method: "POST",
+      headers: providerHeaders(config.apiKey),
+      body: JSON.stringify({
+        model: config.model,
+        messages: chatMessages,
+        max_tokens: options.maxTokens,
+        ...(options.json ? { response_format: { type: "json_object" } } : {}),
+        ...(options.noReasoning && config.baseUrl.includes("openrouter")
+          ? { reasoning: { enabled: false } }
+          : {}),
+      }),
+    },
+    timeoutMs,
+  );
 }
 
 export async function callEnhanceProvider({
@@ -334,6 +390,7 @@ export async function callEnhanceProvider({
   otherNotes = [],
   today,
   locale = "de",
+  timeoutMs,
   fetchFn = fetch,
 }: EnhanceNoteParams): Promise<string> {
   const prompt = buildEnhancePrompt(
@@ -353,7 +410,7 @@ export async function callEnhanceProvider({
   const response = await requestProvider(
     config,
     { system, user: prompt },
-    { maxTokens: 2400, json: true },
+    { maxTokens: 2400, json: true, timeoutMs },
     fetchFn,
   );
 
@@ -734,7 +791,13 @@ function providerHeaders(apiKey: string) {
 }
 
 async function readJsonResponse(response: Response, providerLabel: string) {
-  const text = await response.text();
+  let text: string;
+  try {
+    // Das Abort-Signal des Requests kappt auch das Body-Lesen.
+    text = await response.text();
+  } catch (error) {
+    throw mapTimeoutError(error);
+  }
 
   if (!response.ok) {
     throw new Error(
@@ -834,6 +897,7 @@ type TranscribeParams = {
   audioBase64: string;
   format: "wav" | "mp3";
   locale?: Locale;
+  timeoutMs?: number;
   env?: Env;
   fetchFn?: typeof fetch;
 };
@@ -841,6 +905,7 @@ type TranscribeParams = {
 type ExtractImageParams = {
   imageBase64: string;
   locale?: Locale;
+  timeoutMs?: number;
   env?: Env;
   fetchFn?: typeof fetch;
 };
@@ -904,6 +969,7 @@ export async function transcribeAudio({
   audioBase64,
   format,
   locale = "de",
+  timeoutMs = DEFAULT_PROVIDER_TIMEOUT_MS,
   env = process.env,
   fetchFn = fetch,
 }: TranscribeParams): Promise<string> {
@@ -917,26 +983,31 @@ export async function transcribeAudio({
       ? "Transcribe this voice note verbatim in the language it is spoken in. Return only the transcribed text, without quotes or comments."
       : "Transkribiere diese Sprachnotiz wörtlich in der gesprochenen Sprache. Gib ausschließlich den transkribierten Text zurück, ohne Anführungszeichen oder Kommentare.";
 
-  const response = await fetchFn(joinUrl(config.baseUrl, "chat/completions"), {
-    method: "POST",
-    headers: providerHeaders(config.apiKey),
-    body: JSON.stringify({
-      model: config.model,
-      messages: [
-        {
-          role: "user",
-          content: [
-            { type: "text", text: instruction },
-            {
-              type: "input_audio",
-              input_audio: { data: audioBase64, format },
-            },
-          ],
-        },
-      ],
-      max_tokens: 2000,
-    }),
-  });
+  const response = await fetchWithTimeout(
+    fetchFn,
+    joinUrl(config.baseUrl, "chat/completions"),
+    {
+      method: "POST",
+      headers: providerHeaders(config.apiKey),
+      body: JSON.stringify({
+        model: config.model,
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: instruction },
+              {
+                type: "input_audio",
+                input_audio: { data: audioBase64, format },
+              },
+            ],
+          },
+        ],
+        max_tokens: 2000,
+      }),
+    },
+    timeoutMs,
+  );
 
   const payload = await readJsonResponse(response, "Transkription");
   const text = extractProviderText(payload).trim();
@@ -951,6 +1022,7 @@ export async function transcribeAudio({
 export async function extractImageText({
   imageBase64,
   locale = "de",
+  timeoutMs = DEFAULT_PROVIDER_TIMEOUT_MS,
   env = process.env,
   fetchFn = fetch,
 }: ExtractImageParams): Promise<string> {
@@ -964,26 +1036,31 @@ export async function extractImageText({
       ? "Read this photo of a note (sticky note, whiteboard, notebook page) and extract the text it contains as a compact note. Put each task-like item on its own line. Return only the extracted text, without comments."
       : "Lies dieses Foto einer Notiz (Zettel, Whiteboard, Notizbuchseite) und extrahiere den enthaltenen Text als kompakte Notiz. Setze jeden aufgabenähnlichen Punkt in eine eigene Zeile. Gib ausschließlich den extrahierten Text zurück, ohne Kommentare.";
 
-  const response = await fetchFn(joinUrl(config.baseUrl, "chat/completions"), {
-    method: "POST",
-    headers: providerHeaders(config.apiKey),
-    body: JSON.stringify({
-      model: config.model,
-      messages: [
-        {
-          role: "user",
-          content: [
-            { type: "text", text: instruction },
-            {
-              type: "image_url",
-              image_url: { url: `data:image/jpeg;base64,${imageBase64}` },
-            },
-          ],
-        },
-      ],
-      max_tokens: 1500,
-    }),
-  });
+  const response = await fetchWithTimeout(
+    fetchFn,
+    joinUrl(config.baseUrl, "chat/completions"),
+    {
+      method: "POST",
+      headers: providerHeaders(config.apiKey),
+      body: JSON.stringify({
+        model: config.model,
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: instruction },
+              {
+                type: "image_url",
+                image_url: { url: `data:image/jpeg;base64,${imageBase64}` },
+              },
+            ],
+          },
+        ],
+        max_tokens: 1500,
+      }),
+    },
+    timeoutMs,
+  );
 
   const payload = await readJsonResponse(response, "Foto-Erkennung");
   const text = extractProviderText(payload).trim();
@@ -1005,6 +1082,7 @@ type SummarizeWebParams = {
   url: string;
   title?: string | null;
   locale?: Locale;
+  timeoutMs?: number;
   fetchFn?: typeof fetch;
 };
 
@@ -1015,6 +1093,7 @@ export async function summarizeWebText({
   url,
   title,
   locale = "de",
+  timeoutMs,
   fetchFn = fetch,
 }: SummarizeWebParams): Promise<string> {
   const text = pageText.slice(0, MAX_PAGE_TEXT);
@@ -1045,7 +1124,7 @@ export async function summarizeWebText({
   const response = await requestProvider(
     config,
     { user: prompt.filter(Boolean).join("\n") },
-    { maxTokens: 600, json: false },
+    { maxTokens: 600, json: false, timeoutMs },
     fetchFn,
   );
 
@@ -1063,6 +1142,7 @@ type SummarizeYouTubeParams = {
   title?: string | null;
   author?: string | null;
   locale?: Locale;
+  timeoutMs?: number;
   env?: Env;
   fetchFn?: typeof fetch;
 };
@@ -1074,6 +1154,7 @@ export async function summarizeYouTubeVideo({
   title,
   author,
   locale = "de",
+  timeoutMs = DEFAULT_PROVIDER_TIMEOUT_MS,
   env = process.env,
   fetchFn = fetch,
 }: SummarizeYouTubeParams): Promise<string> {
@@ -1098,25 +1179,30 @@ export async function summarizeYouTubeVideo({
           context ? `Video: ${context}` : "",
         ];
 
-  const response = await fetchFn(joinUrl(config.baseUrl, "chat/completions"), {
-    method: "POST",
-    headers: providerHeaders(config.apiKey),
-    body: JSON.stringify({
-      model: config.model,
-      messages: [
-        {
-          role: "user",
-          content: [
-            { type: "text", text: instruction.filter(Boolean).join("\n") },
-            { type: "video_url", video_url: { url } },
-          ],
-        },
-      ],
-      max_tokens: 800,
-      // Vertex akzeptiert keine Video-URLs — AI Studio bevorzugen.
-      provider: { order: ["google-ai-studio"] },
-    }),
-  });
+  const response = await fetchWithTimeout(
+    fetchFn,
+    joinUrl(config.baseUrl, "chat/completions"),
+    {
+      method: "POST",
+      headers: providerHeaders(config.apiKey),
+      body: JSON.stringify({
+        model: config.model,
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: instruction.filter(Boolean).join("\n") },
+              { type: "video_url", video_url: { url } },
+            ],
+          },
+        ],
+        max_tokens: 800,
+        // Vertex akzeptiert keine Video-URLs — AI Studio bevorzugen.
+        provider: { order: ["google-ai-studio"] },
+      }),
+    },
+    timeoutMs,
+  );
 
   const payload = await readJsonResponse(response, "Video-Analyse");
   const summary = extractProviderText(payload).trim();
@@ -1141,6 +1227,7 @@ type BriefingParams = {
   tasks: BriefingTask[];
   today?: string;
   locale?: Locale;
+  timeoutMs?: number;
   fetchFn?: typeof fetch;
 };
 
@@ -1180,6 +1267,7 @@ export async function generateDailyBriefing({
   tasks,
   today,
   locale = "de",
+  timeoutMs,
   fetchFn = fetch,
 }: BriefingParams): Promise<string> {
   const prompt = buildBriefingPrompt(tasks, today, locale);
@@ -1191,10 +1279,156 @@ export async function generateDailyBriefing({
   const response = await requestProvider(
     config,
     { system, user: prompt },
-    { maxTokens: 400, json: false },
+    { maxTokens: 400, json: false, timeoutMs },
     fetchFn,
   );
 
   const payload = await readJsonResponse(response, config.label);
   return extractProviderText(payload).trim();
+}
+
+// ── Wissensnetz-Analyse ─────────────────────────────────────────────
+
+export type GraphInsightNode = {
+  title: string;
+  tags: string[];
+  project: string | null;
+  degree: number;
+};
+
+export type GraphInsights = {
+  summary: string;
+  clusters: string[];
+  anomalies: string[];
+  gaps: string[];
+  suggestions: string[];
+};
+
+type GraphInsightsParams = {
+  config: ResolvedAiModelConfig;
+  nodes: GraphInsightNode[];
+  // Verlinkungen als Indexpaare in nodes (nur Notiz↔Notiz; Tags stecken
+  // bereits in den Knoten selbst).
+  edges: Array<[number, number]>;
+  locale?: Locale;
+  timeoutMs?: number;
+  fetchFn?: typeof fetch;
+};
+
+export const MAX_INSIGHT_NODES = 250;
+export const MAX_INSIGHT_EDGES = 800;
+const MAX_INSIGHT_LIST_ITEMS = 6;
+
+const INSIGHTS_JSON_SHAPE =
+  '{"summary":"...","clusters":["..."],"anomalies":["..."],"gaps":["..."],"suggestions":["..."]}';
+
+function buildInsightsPrompt(
+  nodes: GraphInsightNode[],
+  edges: Array<[number, number]>,
+  locale: Locale,
+) {
+  const compact = nodes.slice(0, MAX_INSIGHT_NODES).map((node) => ({
+    t: node.title.slice(0, 80),
+    g: node.tags.slice(0, MAX_TAGS),
+    p: node.project,
+    d: node.degree,
+  }));
+  const compactEdges = edges.slice(0, MAX_INSIGHT_EDGES);
+
+  if (locale === "en") {
+    return [
+      "You are the analysis AI of the note app Rote Agenda. You are looking at a user's knowledge graph:",
+      "notes as nodes (t=title, g=tags, p=project, d=number of connections) and note-to-note links as index pairs into the node list.",
+      "Respond exclusively with valid JSON in this shape:",
+      INSIGHTS_JSON_SHAPE,
+      "- summary: 2-4 sentences describing what this knowledge graph revolves around as a whole.",
+      "- clusters: the main thematic clusters with their central notes (max 5 entries).",
+      "- anomalies: notable patterns, e.g. surprising bridges between topics, unusual hubs, duplicate or synonymous tags (max 5).",
+      "- gaps: gaps in the graph: isolated notes or groups, obvious but missing links, topics without a project (max 5).",
+      "- suggestions: concrete next steps to improve the graph (max 4).",
+      "Be specific and reference note titles. Never invent notes. Empty lists are allowed. Write every text in English.",
+      "Graph (JSON):",
+      JSON.stringify({ nodes: compact, edges: compactEdges }),
+    ].join("\n");
+  }
+
+  return [
+    "Du bist die Analyse-KI der Notiz-App Rote Agenda. Vor dir liegt das Wissensnetz einer Nutzerin/eines Nutzers:",
+    "Notizen als Knoten (t=Titel, g=Tags, p=Projekt, d=Anzahl Verbindungen) und Notiz-zu-Notiz-Verlinkungen als Indexpaare in die Knotenliste.",
+    "Antworte ausschließlich mit gültigem JSON in dieser Form:",
+    INSIGHTS_JSON_SHAPE,
+    "- summary: 2-4 Sätze: worum kreist dieses Wissensnetz insgesamt.",
+    "- clusters: die wichtigsten Themen-Cluster mit ihren zentralen Notizen (maximal 5 Einträge).",
+    "- anomalies: Auffälligkeiten, z. B. überraschende Brücken zwischen Themen, ungewöhnliche Knotenpunkte, doppelte oder synonyme Tags (maximal 5).",
+    "- gaps: Lücken im Netz: isolierte Notizen oder Gruppen, naheliegende aber fehlende Verbindungen, Themen ohne Projekt (maximal 5).",
+    "- suggestions: konkrete nächste Schritte für ein besseres Netz (maximal 4).",
+    "Sei konkret und beziehe dich auf Notiz-Titel. Erfinde keine Notizen. Leere Listen sind erlaubt. Formuliere alle Texte auf Deutsch.",
+    "Netz (JSON):",
+    JSON.stringify({ nodes: compact, edges: compactEdges }),
+  ].join("\n");
+}
+
+export function buildGraphInsightsFromProviderText(providerText: string): GraphInsights {
+  const payload = parseProviderJson(providerText);
+  if (!isRecord(payload)) {
+    throw new Error("KI-Antwort enthält kein gültiges Objekt.");
+  }
+
+  return {
+    summary: readRequiredString(payload.summary, "summary"),
+    clusters: readInsightList(payload.clusters),
+    anomalies: readInsightList(payload.anomalies),
+    gaps: readInsightList(payload.gaps),
+    suggestions: readInsightList(payload.suggestions),
+  };
+}
+
+function readInsightList(value: unknown): string[] {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value)) {
+    throw new Error("KI-Antwort enthält eine ungültige Liste.");
+  }
+
+  return value
+    .filter((item): item is string => typeof item === "string" && Boolean(item.trim()))
+    .map((item) => item.trim())
+    .slice(0, MAX_INSIGHT_LIST_ITEMS);
+}
+
+// Analyse-Lauf mit einem Wiederholungsversuch bei unbrauchbarem JSON —
+// Provider-/HTTP-Fehler werden wie überall direkt gemeldet.
+export async function generateGraphInsights({
+  config,
+  nodes,
+  edges,
+  locale = "de",
+  timeoutMs,
+  fetchFn = fetch,
+}: GraphInsightsParams): Promise<GraphInsights> {
+  const prompt = buildInsightsPrompt(nodes, edges, locale);
+  const system =
+    locale === "en"
+      ? "You analyze knowledge graphs of notes and respond exclusively with JSON."
+      : "Du analysierst Wissensnetze aus Notizen und antwortest ausschließlich mit JSON.";
+  let lastError: unknown;
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const response = await requestProvider(
+        config,
+        { system, user: prompt },
+        { maxTokens: 1000, json: true, timeoutMs, noReasoning: true },
+        fetchFn,
+      );
+      const payload = await readJsonResponse(response, config.label);
+      return buildGraphInsightsFromProviderText(extractProviderText(payload));
+    } catch (error) {
+      lastError = error;
+      const retryable =
+        error instanceof Error && error.message.startsWith("KI-Antwort");
+      if (!retryable) throw error;
+    }
+  }
+
+  throw lastError;
 }

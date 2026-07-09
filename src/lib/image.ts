@@ -50,11 +50,24 @@ export async function fileToJpegBlob(
   }
 }
 
+// Für den synchronen Erkennungs-Pfad (Route-Handler): Die Appwrite-Site
+// bricht Requests nach ~30 s ab — je kleiner das Bild, desto schneller
+// antwortet das Modell. Deshalb schrittweise verkleinern, bis das Bild
+// unter das Byte-Budget passt.
+const SYNC_MAX_DIMENSION = 1280;
+const SYNC_MAX_BYTES = 350_000;
+
 export async function fileToJpegBase64(
   file: File,
-  maxDimension = MAX_DIMENSION,
+  maxDimension = SYNC_MAX_DIMENSION,
 ): Promise<string> {
-  const blob = await fileToJpegBlob(file, maxDimension);
+  let blob = await fileToJpegBlob(file, maxDimension);
+
+  for (const dimension of [1024, 800, 640]) {
+    if (blob.size <= SYNC_MAX_BYTES) break;
+    blob = await fileToJpegBlob(file, dimension);
+  }
+
   const buffer = await blob.arrayBuffer();
   const bytes = new Uint8Array(buffer);
   let binary = "";

@@ -1,9 +1,10 @@
 "use client";
 
-import { ArrowLeft, Maximize2 } from "lucide-react";
+import { ArrowLeft, Loader2, Maximize2, Search, Settings2, Sparkles, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { cx } from "@/components/app-helpers";
 import { EmptyState, ScreenHeader } from "@/components/ui/primitives";
+import type { GraphInsightNode, GraphInsights } from "@/lib/ai-server";
 import {
   buildNoteGraph,
   initSimNodes,
@@ -12,7 +13,7 @@ import {
   type SimLink,
   type SimNode,
 } from "@/lib/graph";
-import type { Translator } from "@/lib/i18n";
+import type { MessageKey, Translator } from "@/lib/i18n";
 import { withAlpha } from "@/lib/project-colors";
 import type { Note, Project } from "@/lib/types";
 
@@ -20,21 +21,67 @@ const PREFS_KEY = "rote-agenda-graph";
 const MIN_ZOOM = 0.15;
 const MAX_ZOOM = 4;
 
-type GraphPrefs = { includeTags: boolean; hideOrphans: boolean };
+type LabelMode = "off" | "auto" | "always";
+
+type GraphPrefs = {
+  includeTags: boolean;
+  hideOrphans: boolean;
+  nodeScale: number;
+  restScale: number;
+  labelMode: LabelMode;
+  halo: boolean;
+};
+
+const DEFAULT_PREFS: GraphPrefs = {
+  includeTags: true,
+  hideOrphans: false,
+  nodeScale: 1,
+  restScale: 1,
+  labelMode: "auto",
+  halo: true,
+};
+
+const DISTANCE_OPTIONS: Array<{ value: number; labelKey: MessageKey }> = [
+  { value: 0.75, labelKey: "graph.settings.distance.compact" },
+  { value: 1, labelKey: "graph.settings.distance.normal" },
+  { value: 1.35, labelKey: "graph.settings.distance.wide" },
+];
+
+const LABEL_MODE_KEYS: Record<LabelMode, MessageKey> = {
+  off: "graph.settings.labels.off",
+  auto: "graph.settings.labels.auto",
+  always: "graph.settings.labels.always",
+};
+
+export type GraphAnalysisPayload = {
+  nodes: GraphInsightNode[];
+  edges: Array<[number, number]>;
+};
 
 // Nur clientseitig gerendert (hinter dem Auth-Check), daher ist der
 // localStorage-Initializer hydration-sicher.
 function readPrefs(): GraphPrefs {
-  if (typeof window === "undefined") return { includeTags: true, hideOrphans: false };
+  if (typeof window === "undefined") return DEFAULT_PREFS;
   try {
     const raw = window.localStorage.getItem(PREFS_KEY);
     const parsed = raw ? (JSON.parse(raw) as Partial<GraphPrefs>) : {};
     return {
       includeTags: parsed.includeTags !== false,
       hideOrphans: parsed.hideOrphans === true,
+      nodeScale:
+        typeof parsed.nodeScale === "number" && parsed.nodeScale >= 0.5 && parsed.nodeScale <= 2
+          ? parsed.nodeScale
+          : 1,
+      restScale:
+        typeof parsed.restScale === "number" && parsed.restScale >= 0.5 && parsed.restScale <= 2
+          ? parsed.restScale
+          : 1,
+      labelMode:
+        parsed.labelMode === "off" || parsed.labelMode === "always" ? parsed.labelMode : "auto",
+      halo: parsed.halo !== false,
     };
   } catch {
-    return { includeTags: true, hideOrphans: false };
+    return DEFAULT_PREFS;
   }
 }
 
@@ -43,35 +90,61 @@ type DragState =
   | { kind: "node"; index: number; moved: boolean; startX: number; startY: number }
   | { kind: "pan"; moved: boolean; startX: number; startY: number; panX: number; panY: number };
 
+type Selection = {
+  kind: "note" | "tag";
+  id: string;
+  refId: string;
+  label: string;
+  color: string | null;
+  projectTitle: string | null;
+  tags: string[];
+  snippet: string;
+  degree: number;
+};
+
 export function GraphScreen({
   notes,
   projects,
+  insights,
+  insightsError,
+  isAnalyzing,
   t,
   onBack,
   onOpenNote,
+  onAnalyze,
+  onDismissInsights,
 }: {
   notes: Note[];
   projects: Project[];
+  insights: GraphInsights | null;
+  insightsError: string | null;
+  isAnalyzing: boolean;
   t: Translator;
   onBack: () => void;
   onOpenNote: (noteId: string) => void;
+  onAnalyze: (payload: GraphAnalysisPayload) => void;
+  onDismissInsights: () => void;
 }) {
   const [prefs, setPrefs] = useState<GraphPrefs>(() => readPrefs());
+  const [query, setQuery] = useState("");
+  const [projectFilter, setProjectFilter] = useState<string[]>([]);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [selection, setSelection] = useState<Selection | null>(null);
 
   const graph = useMemo(
     () =>
       buildNoteGraph(notes, projects, {
         includeTags: prefs.includeTags,
         hideOrphans: prefs.hideOrphans,
+        projectIds: projectFilter,
+        query,
       }),
-    [notes, projects, prefs],
+    [notes, projects, prefs.includeTags, prefs.hideOrphans, projectFilter, query],
   );
 
-  // Legende: nur Projekte, die im Graphen tatsächlich vorkommen.
-  const legendProjects = useMemo(() => {
-    const used = new Set(
-      notes.flatMap((note) => (note.projectId ? [note.projectId] : [])),
-    );
+  // Projekt-Chips dienen als Legende UND Filter zugleich.
+  const usedProjects = useMemo(() => {
+    const used = new Set(notes.flatMap((note) => (note.projectId ? [note.projectId] : [])));
     return projects.filter((project) => used.has(project.id));
   }, [notes, projects]);
 
@@ -90,6 +163,9 @@ export function GraphScreen({
   const pinchRef = useRef<{ dist: number } | null>(null);
   // "Ansicht einpassen" lebt im Render-Effekt; Header-Button ruft es hierüber.
   const fitRef = useRef<() => void>(() => undefined);
+  // Darstellung + Auswahl müssen in der Render-Schleife aktuell sein.
+  const prefsRef = useRef(prefs);
+  const selectionRef = useRef<string | null>(null);
 
   function updatePrefs(patch: Partial<GraphPrefs>) {
     setPrefs((current) => {
@@ -102,6 +178,31 @@ export function GraphScreen({
       return next;
     });
   }
+
+  useEffect(() => {
+    prefsRef.current = prefs;
+    needsDrawRef.current = true;
+  }, [prefs]);
+
+  // Ein anderer Kanten-Abstand braucht neue Layout-Energie.
+  useEffect(() => {
+    alphaRef.current = Math.max(alphaRef.current, 0.6);
+  }, [prefs.restScale]);
+
+  // Herausgefilterte Auswahl gilt als geschlossen — abgeleitet statt per
+  // setState im Effekt (ESLint-Regel react-hooks/set-state-in-effect).
+  const activeSelection = useMemo(
+    () =>
+      selection && graph.nodes.some((node) => node.id === selection.id)
+        ? selection
+        : null,
+    [selection, graph],
+  );
+
+  useEffect(() => {
+    selectionRef.current = activeSelection?.id ?? null;
+    needsDrawRef.current = true;
+  }, [activeSelection]);
 
   // Graph-Daten in die Simulation übernehmen; bekannte Knoten behalten
   // ihre Position, damit Updates das Layout nicht zerwürfeln.
@@ -146,10 +247,18 @@ export function GraphScreen({
       };
     }
 
+    function focusIndex() {
+      if (hoverRef.current >= 0) return hoverRef.current;
+      const selectedId = selectionRef.current;
+      if (!selectedId) return -1;
+      return nodesRef.current.findIndex((node) => node.id === selectedId);
+    }
+
     function draw() {
       const nodes = nodesRef.current;
       const links = linksRef.current;
       const view = viewRef.current;
+      const settings = prefsRef.current;
       const width = canvas!.clientWidth;
       const height = canvas!.clientHeight;
 
@@ -161,13 +270,13 @@ export function GraphScreen({
 
       context!.clearRect(0, 0, width, height);
 
-      const hovered = hoverRef.current;
+      const focus = focusIndex();
       const neighborIds = new Set<number>();
-      if (hovered >= 0) {
-        neighborIds.add(hovered);
+      if (focus >= 0) {
+        neighborIds.add(focus);
         for (const link of links) {
-          if (link.a === hovered) neighborIds.add(link.b);
-          if (link.b === hovered) neighborIds.add(link.a);
+          if (link.a === focus) neighborIds.add(link.b);
+          if (link.b === focus) neighborIds.add(link.a);
         }
       }
 
@@ -175,14 +284,14 @@ export function GraphScreen({
       for (const link of links) {
         const a = toScreen(nodes[link.a].x, nodes[link.a].y);
         const b = toScreen(nodes[link.b].x, nodes[link.b].y);
-        const touchesHover = hovered >= 0 && (link.a === hovered || link.b === hovered);
+        const touchesFocus = focus >= 0 && (link.a === focus || link.b === focus);
 
         context!.beginPath();
         context!.moveTo(a.x, a.y);
         context!.lineTo(b.x, b.y);
-        context!.strokeStyle = touchesHover ? red : lineStrong;
-        context!.globalAlpha = touchesHover ? 0.8 : hovered >= 0 ? 0.12 : 0.45;
-        context!.lineWidth = touchesHover ? 1.6 : 1;
+        context!.strokeStyle = touchesFocus ? red : lineStrong;
+        context!.globalAlpha = touchesFocus ? 0.8 : focus >= 0 ? 0.12 : 0.45;
+        context!.lineWidth = touchesFocus ? 1.6 : 1;
         context!.stroke();
       }
 
@@ -195,8 +304,8 @@ export function GraphScreen({
       for (const index of order) {
         const node = nodes[index];
         const { x, y } = toScreen(node.x, node.y);
-        const radius = Math.max(2, node.radius * view.k);
-        const isDimmed = hovered >= 0 && !neighborIds.has(index);
+        const radius = Math.max(2, node.radius * view.k * settings.nodeScale);
+        const isDimmed = focus >= 0 && !neighborIds.has(index);
 
         context!.globalAlpha = isDimmed ? 0.18 : 1;
         context!.beginPath();
@@ -212,7 +321,7 @@ export function GraphScreen({
           context!.fillStyle = node.color ?? muted;
           context!.fill();
           const tint = node.color ? withAlpha(node.color, 0.25) : null;
-          if (tint && view.k > 0.5 && !isDimmed) {
+          if (settings.halo && tint && view.k > 0.5 && !isDimmed) {
             // Weicher Farbhof, passend zu den getönten Aufgabenzeilen.
             context!.beginPath();
             context!.arc(x, y, radius + 4 * view.k, 0, Math.PI * 2);
@@ -222,7 +331,7 @@ export function GraphScreen({
           }
         }
 
-        if (index === hovered) {
+        if (index === focus) {
           context!.beginPath();
           context!.arc(x, y, radius + 3.5, 0, Math.PI * 2);
           context!.strokeStyle = red;
@@ -231,16 +340,21 @@ export function GraphScreen({
         }
       }
 
-      // Beschriftungen: beim Hineinzoomen alle, sonst nur die Hover-Umgebung.
-      const zoomLabelAlpha = Math.min(1, Math.max(0, (view.k - 0.7) / 0.35));
+      // Beschriftungen je nach Einstellung: aus, zoomabhängig oder immer.
+      const zoomLabelAlpha =
+        settings.labelMode === "always"
+          ? 1
+          : settings.labelMode === "off"
+            ? 0
+            : Math.min(1, Math.max(0, (view.k - 0.7) / 0.35));
       context!.textAlign = "center";
       context!.textBaseline = "top";
 
       for (const index of order) {
         const node = nodes[index];
-        const isFocus = hovered >= 0 && neighborIds.has(index);
+        const isFocus = focus >= 0 && neighborIds.has(index);
         const base = node.kind === "tag" ? zoomLabelAlpha * 0.8 : zoomLabelAlpha;
-        const alpha = isFocus ? 1 : hovered >= 0 ? base * 0.15 : base;
+        const alpha = isFocus ? 1 : focus >= 0 ? base * 0.15 : base;
         if (alpha < 0.05) continue;
 
         const { x, y } = toScreen(node.x, node.y);
@@ -254,9 +368,9 @@ export function GraphScreen({
         context!.globalAlpha = alpha;
         context!.lineWidth = 3;
         context!.strokeStyle = halo;
-        context!.strokeText(label, x, y + node.radius * view.k + 5);
+        context!.strokeText(label, x, y + node.radius * view.k * settings.nodeScale + 5);
         context!.fillStyle = node.kind === "tag" ? muted : ink;
-        context!.fillText(label, x, y + node.radius * view.k + 5);
+        context!.fillText(label, x, y + node.radius * view.k * settings.nodeScale + 5);
       }
 
       context!.globalAlpha = 1;
@@ -294,15 +408,21 @@ export function GraphScreen({
       needsDrawRef.current = true;
     }
 
-    // Für Header-Button und Doppelklick verfügbar machen.
     fitRef.current = zoomToFit;
 
     function resize() {
       const ratio = window.devicePixelRatio || 1;
+      const wasDegenerate = canvas!.width <= 2 || canvas!.height <= 2;
       canvas!.width = Math.max(1, Math.round(container!.clientWidth * ratio));
       canvas!.height = Math.max(1, Math.round(container!.clientHeight * ratio));
       context!.setTransform(ratio, 0, 0, ratio, 0, 0);
       needsDrawRef.current = true;
+
+      // Nach einem 0-Breite-Zustand (eingeklapptes Fenster, App-Switcher)
+      // zeigt die gemerkte Kamera ins Leere — Ansicht neu einpassen.
+      if (wasDegenerate && canvas!.width > 2 && canvas!.height > 2) {
+        zoomToFit();
+      }
     }
 
     const observer = new ResizeObserver(resize);
@@ -320,10 +440,23 @@ export function GraphScreen({
 
     function tick() {
       raf = requestAnimationFrame(tick);
+
+      // Selbstheilung: Nach Screen-Wechseln verpasst der ResizeObserver
+      // gelegentlich das erste Layout — dann wäre der Canvas 1 px breit.
+      const ratio = window.devicePixelRatio || 1;
+      if (
+        canvas!.width !== Math.max(1, Math.round(container!.clientWidth * ratio)) ||
+        canvas!.height !== Math.max(1, Math.round(container!.clientHeight * ratio))
+      ) {
+        resize();
+      }
+
       const dragging = dragRef.current?.kind === "node";
 
       if (alphaRef.current > 0.02) {
-        simulationStep(nodesRef.current, linksRef.current, alphaRef.current);
+        simulationStep(nodesRef.current, linksRef.current, alphaRef.current, {
+          restScale: prefsRef.current.restScale,
+        });
         alphaRef.current = Math.max(alphaRef.current * 0.975, dragging ? 0.25 : 0);
         needsDrawRef.current = true;
 
@@ -347,7 +480,7 @@ export function GraphScreen({
     };
   }, [hasCanvas]);
 
-  // ── Pointer-Interaktion (Pan, Zoom, Pinch, Drag, Hover, Klick) ──────
+  // ── Pointer-Interaktion (Pan, Zoom, Pinch, Drag, Hover, Auswahl) ────
   function localPoint(event: { clientX: number; clientY: number }) {
     const rect = canvasRef.current!.getBoundingClientRect();
     return { x: event.clientX - rect.left, y: event.clientY - rect.top };
@@ -366,18 +499,55 @@ export function GraphScreen({
     const world = toWorld(point);
     const view = viewRef.current;
     const nodes = nodesRef.current;
+    const nodeScale = prefsRef.current.nodeScale;
     // Notizen liegen über den Tag-Knoten, daher zuerst prüfen.
     for (const kind of ["note", "tag"] as const) {
       for (let index = nodes.length - 1; index >= 0; index--) {
         const node = nodes[index];
         if (node.kind !== kind) continue;
-        const hitRadius = node.radius + 6 / view.k;
+        const hitRadius = node.radius * nodeScale + 6 / view.k;
         const dx = world.x - node.x;
         const dy = world.y - node.y;
         if (dx * dx + dy * dy <= hitRadius * hitRadius) return index;
       }
     }
     return -1;
+  }
+
+  // Auswahl-Panel statt Direktnavigation: erst Infos zeigen, Öffnen ist
+  // ein bewusster zweiter Klick.
+  function selectNode(index: number) {
+    const node = nodesRef.current[index];
+    if (node.kind === "tag") {
+      setSelection({
+        kind: "tag",
+        id: node.id,
+        refId: node.refId,
+        label: node.label,
+        color: null,
+        projectTitle: null,
+        tags: [],
+        snippet: "",
+        degree: node.degree,
+      });
+      return;
+    }
+
+    const note = notes.find((entry) => entry.id === node.refId);
+    const project = note?.projectId
+      ? projects.find((entry) => entry.id === note.projectId)
+      : undefined;
+    setSelection({
+      kind: "note",
+      id: node.id,
+      refId: node.refId,
+      label: node.label,
+      color: node.color,
+      projectTitle: project?.title ?? null,
+      tags: note?.tags ?? [],
+      snippet: (note ? note.enhanced || note.content : "").slice(0, 180),
+      degree: node.degree,
+    });
   }
 
   function handlePointerDown(event: React.PointerEvent<HTMLCanvasElement>) {
@@ -459,8 +629,7 @@ export function GraphScreen({
       hoverRef.current = hit;
       needsDrawRef.current = true;
     }
-    canvasRef.current!.style.cursor =
-      hit >= 0 ? (nodesRef.current[hit].kind === "note" ? "pointer" : "grab") : "grab";
+    canvasRef.current!.style.cursor = hit >= 0 ? "pointer" : "grab";
   }
 
   function releaseDraggedNode() {
@@ -478,13 +647,11 @@ export function GraphScreen({
     pointersRef.current.delete(event.pointerId);
     if (pointersRef.current.size < 2) pinchRef.current = null;
 
-    if (drag?.kind === "node" && !drag.moved) {
-      const node = nodesRef.current[drag.index];
-      if (node.kind === "note") {
-        releaseDraggedNode();
-        dragRef.current = null;
-        onOpenNote(node.refId);
-        return;
+    if (drag && !drag.moved) {
+      if (drag.kind === "node") {
+        selectNode(drag.index);
+      } else {
+        setSelection(null);
       }
     }
 
@@ -512,6 +679,42 @@ export function GraphScreen({
     zoomAt(localPoint(event), Math.exp(-event.deltaY * 0.0012));
   }
 
+  // ── KI-Analyse: kompaktes Abbild des gefilterten Netzes ─────────────
+  function startAnalysis() {
+    const noteNodes = graph.nodes.filter((node) => node.kind === "note");
+    const indexByNode = new Map(noteNodes.map((node, index) => [node.id, index]));
+    const noteById = new Map(notes.map((note) => [note.id, note]));
+    const projectById = new Map(projects.map((project) => [project.id, project]));
+
+    const payloadNodes: GraphInsightNode[] = noteNodes.map((node) => {
+      const note = noteById.get(node.refId);
+      const project = note?.projectId ? projectById.get(note.projectId) : undefined;
+      return {
+        title: node.label,
+        tags: note?.tags ?? [],
+        project: project?.title ?? null,
+        degree: node.degree,
+      };
+    });
+
+    const edges: Array<[number, number]> = graph.links.flatMap((link) => {
+      if (link.kind !== "related") return [];
+      const a = indexByNode.get(link.source);
+      const b = indexByNode.get(link.target);
+      return a === undefined || b === undefined ? [] : [[a, b] as [number, number]];
+    });
+
+    onAnalyze({ nodes: payloadNodes, edges });
+  }
+
+  function toggleProject(projectId: string) {
+    setProjectFilter((current) =>
+      current.includes(projectId)
+        ? current.filter((id) => id !== projectId)
+        : [...current, projectId],
+    );
+  }
+
   const noteCount = graph.nodes.filter((node) => node.kind === "note").length;
 
   const chipClass = (active: boolean) =>
@@ -521,6 +724,27 @@ export function GraphScreen({
         ? "border-[var(--green)] bg-[var(--green)] text-white"
         : "border-[var(--line-strong)] text-[var(--ink-soft)] hover:bg-[var(--surface-strong)]",
     );
+
+  const settingChip = (active: boolean) =>
+    cx(
+      "rounded-[5px] border px-2.5 py-1.5 text-[11px] font-semibold",
+      active
+        ? "border-[var(--green)] bg-[var(--green)] text-white"
+        : "border-[var(--line-strong)] text-[var(--ink-soft)]",
+    );
+
+  const insightSections: Array<{ key: string; title: string; items: string[] }> = insights
+    ? [
+        { key: "clusters", title: t("graph.insights.clusters"), items: insights.clusters },
+        { key: "anomalies", title: t("graph.insights.anomalies"), items: insights.anomalies },
+        { key: "gaps", title: t("graph.insights.gaps"), items: insights.gaps },
+        {
+          key: "suggestions",
+          title: t("graph.insights.suggestions"),
+          items: insights.suggestions,
+        },
+      ].filter((section) => section.items.length)
+    : [];
 
   return (
     <div className="flex flex-1 flex-col px-6 pb-6 pt-3 md:px-8 md:pt-8 lg:px-10">
@@ -538,7 +762,116 @@ export function GraphScreen({
         <EmptyState title={t("graph.empty.title")} text={t("graph.empty.text")} />
       ) : (
         <>
-          <div className="mt-4 flex flex-wrap items-center gap-2">
+          <div className="mt-4 flex items-center gap-2">
+            <div className="flex min-w-0 flex-1 items-center gap-2 rounded-[5px] border border-[var(--line)] bg-[var(--field)] px-3">
+              <Search className="h-4 w-4 shrink-0 text-[var(--muted)]" />
+              <input
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder={t("graph.searchPlaceholder")}
+                className="h-9 w-full bg-transparent text-[13px] outline-none placeholder:text-[var(--muted)]"
+              />
+              {query ? (
+                <button
+                  type="button"
+                  onClick={() => setQuery("")}
+                  aria-label={t("common.close")}
+                  className="grid h-6 w-6 shrink-0 place-items-center text-[var(--muted)]"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              ) : null}
+            </div>
+            <div className="relative shrink-0">
+              <button
+                type="button"
+                onClick={() => setSettingsOpen((open) => !open)}
+                aria-label={t("graph.settings")}
+                aria-expanded={settingsOpen}
+                className={cx(
+                  "grid h-9 w-9 place-items-center rounded-[5px] border",
+                  settingsOpen
+                    ? "border-[var(--green)] bg-[var(--green)] text-white"
+                    : "border-[var(--line-strong)] text-[var(--ink)]",
+                )}
+              >
+                <Settings2 className="h-4 w-4" />
+              </button>
+              {settingsOpen ? (
+                <div className="absolute right-0 top-11 z-40 w-64 rounded-[8px] border border-[var(--line)] bg-[var(--paper-soft)] p-4 shadow-xl">
+                  <p className="text-[11px] font-bold uppercase tracking-[0.05em] text-[var(--muted)]">
+                    {t("graph.settings")}
+                  </p>
+                  <label className="mt-3 block text-[12px] font-semibold">
+                    {t("graph.settings.nodeSize")}
+                    <input
+                      type="range"
+                      min={60}
+                      max={160}
+                      step={10}
+                      value={Math.round(prefs.nodeScale * 100)}
+                      onChange={(event) =>
+                        updatePrefs({ nodeScale: Number(event.target.value) / 100 })
+                      }
+                      className="mt-1 w-full accent-[var(--red)]"
+                    />
+                  </label>
+                  <p className="mt-3 text-[12px] font-semibold">{t("graph.settings.distance")}</p>
+                  <div className="mt-1 flex gap-1.5">
+                    {DISTANCE_OPTIONS.map((option) => (
+                      <button
+                        key={option.labelKey}
+                        type="button"
+                        onClick={() => updatePrefs({ restScale: option.value })}
+                        className={settingChip(Math.abs(prefs.restScale - option.value) < 0.01)}
+                      >
+                        {t(option.labelKey)}
+                      </button>
+                    ))}
+                  </div>
+                  <p className="mt-3 text-[12px] font-semibold">{t("graph.settings.labels")}</p>
+                  <div className="mt-1 flex gap-1.5">
+                    {(["off", "auto", "always"] as const).map((mode) => (
+                      <button
+                        key={mode}
+                        type="button"
+                        onClick={() => updatePrefs({ labelMode: mode })}
+                        className={settingChip(prefs.labelMode === mode)}
+                      >
+                        {t(LABEL_MODE_KEYS[mode])}
+                      </button>
+                    ))}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => updatePrefs({ halo: !prefs.halo })}
+                    aria-pressed={prefs.halo}
+                    className={cx("mt-3", settingChip(prefs.halo))}
+                  >
+                    {t("graph.settings.halo")}
+                  </button>
+                </div>
+              ) : null}
+            </div>
+            <button
+              type="button"
+              onClick={startAnalysis}
+              disabled={isAnalyzing || noteCount < 3}
+              title={noteCount < 3 ? t("graph.insights.tooFew") : undefined}
+              className="flex h-9 shrink-0 items-center gap-2 rounded-[5px] bg-[var(--red)] px-3 text-[12px] font-bold text-white disabled:opacity-50"
+            >
+              {isAnalyzing ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Sparkles className="h-4 w-4" />
+              )}
+              <span className="hidden sm:inline">
+                {isAnalyzing ? t("graph.analyzing") : t("graph.analyze")}
+              </span>
+            </button>
+          </div>
+
+          <div className="mt-2 flex flex-wrap items-center gap-2">
             <button
               type="button"
               aria-pressed={prefs.includeTags}
@@ -555,34 +888,33 @@ export function GraphScreen({
             >
               {t("graph.hideOrphans")}
             </button>
-            <span className="ml-auto text-[11px] text-[var(--muted)]">
-              {t("graph.stats", {
-                notes: noteCount,
-                links: graph.links.length,
-              })}
-            </span>
-          </div>
-
-          {legendProjects.length ? (
-            <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1">
-              {legendProjects.slice(0, 6).map((project) => (
-                <span
+            {usedProjects.map((project) => {
+              const active = projectFilter.includes(project.id);
+              return (
+                <button
                   key={project.id}
-                  className="flex items-center gap-1.5 text-[11px] text-[var(--ink-soft)]"
+                  type="button"
+                  aria-pressed={active}
+                  onClick={() => toggleProject(project.id)}
+                  className={cx(chipClass(active), "flex items-center gap-1.5")}
                 >
                   <span
                     className="h-2 w-2 rounded-full"
                     style={{ backgroundColor: project.color }}
                   />
                   {project.title}
-                </span>
-              ))}
-              {legendProjects.length > 6 ? (
-                <span className="text-[11px] text-[var(--muted)]">
-                  +{legendProjects.length - 6}
-                </span>
-              ) : null}
-            </div>
+                </button>
+              );
+            })}
+            <span className="ml-auto text-[11px] text-[var(--muted)]">
+              {t("graph.stats", { notes: noteCount, links: graph.links.length })}
+            </span>
+          </div>
+
+          {insightsError ? (
+            <p className="mt-2 rounded-[5px] border border-[var(--red)] bg-[var(--surface-strong)] p-2.5 text-[12px] leading-5 text-[var(--red)]">
+              {insightsError}
+            </p>
           ) : null}
 
           <div
@@ -601,6 +933,117 @@ export function GraphScreen({
               onWheel={handleWheel}
               onDoubleClick={() => fitRef.current()}
             />
+
+            {noteCount === 0 ? (
+              <p className="pointer-events-none absolute inset-x-6 top-6 text-center text-[13px] text-[var(--muted)]">
+                {t("graph.noMatches")}
+              </p>
+            ) : null}
+
+            {activeSelection ? (
+              <div className="absolute bottom-3 left-3 z-30 w-[min(320px,calc(100%-24px))] rounded-[8px] border border-[var(--line)] bg-[var(--paper-soft)] p-4 shadow-xl">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="flex items-center gap-2 text-[14px] font-bold leading-5">
+                      {activeSelection.kind === "note" && activeSelection.color ? (
+                        <span
+                          className="h-2.5 w-2.5 shrink-0 rounded-full"
+                          style={{ backgroundColor: activeSelection.color }}
+                        />
+                      ) : null}
+                      <span className="truncate">{activeSelection.label}</span>
+                    </p>
+                    <p className="mt-0.5 text-[11px] text-[var(--muted)]">
+                      {activeSelection.kind === "note"
+                        ? [
+                            activeSelection.projectTitle ?? t("task.noProject"),
+                            t("graph.selected.links", { count: activeSelection.degree }),
+                          ].join(" · ")
+                        : t("graph.selected.links", { count: activeSelection.degree })}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setSelection(null)}
+                    aria-label={t("common.close")}
+                    className="grid h-7 w-7 shrink-0 place-items-center text-[var(--muted)]"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+                {activeSelection.kind === "note" ? (
+                  <>
+                    {activeSelection.snippet ? (
+                      <p className="mt-2 line-clamp-3 text-[12px] leading-5 text-[var(--ink-soft)]">
+                        {activeSelection.snippet}
+                      </p>
+                    ) : null}
+                    {activeSelection.tags.length ? (
+                      <p className="mt-2 truncate text-[11px] text-[var(--muted)]">
+                        {activeSelection.tags.map((tag) => `#${tag}`).join(" ")}
+                      </p>
+                    ) : null}
+                    <button
+                      type="button"
+                      onClick={() => onOpenNote(activeSelection.refId)}
+                      className="mt-3 w-full rounded-[5px] bg-[var(--red)] px-3 py-2 text-[12px] font-bold text-white"
+                    >
+                      {t("graph.openNote")}
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setQuery(`#${activeSelection.refId}`);
+                      setSelection(null);
+                    }}
+                    className="mt-3 w-full rounded-[5px] bg-[var(--green)] px-3 py-2 text-[12px] font-bold text-white"
+                  >
+                    {t("graph.filterTag")}
+                  </button>
+                )}
+              </div>
+            ) : null}
+
+            {insights ? (
+              <div className="absolute inset-y-3 right-3 z-20 w-[min(320px,calc(100%-24px))] overflow-y-auto rounded-[8px] border border-[var(--line)] bg-[var(--paper-soft)] p-4 shadow-xl">
+                <div className="flex items-start justify-between gap-2">
+                  <p className="flex items-center gap-2 text-[13px] font-bold">
+                    <Sparkles className="h-4 w-4 text-[var(--red)]" />
+                    {t("graph.insights.title")}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={onDismissInsights}
+                    aria-label={t("common.close")}
+                    className="grid h-7 w-7 shrink-0 place-items-center text-[var(--muted)]"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+                <p className="mt-2 text-[12px] leading-5 text-[var(--ink-soft)]">
+                  {insights.summary}
+                </p>
+                {insightSections.map((section) => (
+                  <div key={section.key} className="mt-3">
+                    <p className="text-[11px] font-bold uppercase tracking-[0.05em] text-[var(--muted)]">
+                      {section.title}
+                    </p>
+                    <ul className="mt-1 space-y-1.5">
+                      {section.items.map((item, index) => (
+                        <li
+                          key={index}
+                          className="border-l-2 border-[var(--line-strong)] pl-2 text-[12px] leading-5 text-[var(--ink-soft)]"
+                        >
+                          {item}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ))}
+              </div>
+            ) : null}
           </div>
 
           <p className="mt-2 text-[11px] leading-5 text-[var(--muted)]">

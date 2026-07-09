@@ -32,7 +32,24 @@ export type NoteGraph = { nodes: GraphNode[]; links: GraphLink[] };
 export type BuildGraphOptions = {
   includeTags?: boolean;
   hideOrphans?: boolean;
+  // Nur Notizen dieser Projekte (leer/undefined = alle).
+  projectIds?: string[];
+  // Volltext-Filter über Titel, Tags und Inhalt; "#tag" filtert nur Tags.
+  query?: string;
 };
+
+function matchesQuery(note: Note, query: string) {
+  if (query.startsWith("#")) {
+    const tag = query.slice(1);
+    return !tag || note.tags.some((entry) => entry.toLowerCase().includes(tag));
+  }
+
+  return (
+    note.title.toLowerCase().includes(query) ||
+    note.tags.some((entry) => entry.toLowerCase().includes(query)) ||
+    note.content.toLowerCase().includes(query)
+  );
+}
 
 export function noteNodeId(noteId: string) {
   return `note:${noteId}`;
@@ -43,11 +60,22 @@ export function tagNodeId(tag: string) {
 }
 
 export function buildNoteGraph(
-  notes: Note[],
+  allNotes: Note[],
   projects: Project[],
-  { includeTags = true, hideOrphans = false }: BuildGraphOptions = {},
+  { includeTags = true, hideOrphans = false, projectIds, query }: BuildGraphOptions = {},
 ): NoteGraph {
   const colorByProject = new Map(projects.map((project) => [project.id, project.color]));
+
+  let notes = allNotes;
+  if (projectIds && projectIds.length) {
+    const wanted = new Set(projectIds);
+    notes = notes.filter((note) => note.projectId && wanted.has(note.projectId));
+  }
+  const trimmedQuery = query?.trim().toLowerCase() ?? "";
+  if (trimmedQuery) {
+    notes = notes.filter((note) => matchesQuery(note, trimmedQuery));
+  }
+
   const noteIds = new Set(notes.map((note) => note.id));
 
   const links: GraphLink[] = [];
@@ -206,9 +234,19 @@ const LINK_STRENGTH: Record<GraphLinkKind, number> = { related: 0.035, tag: 0.05
 const GRAVITY = 0.012;
 const FRICTION = 0.8;
 
+export type SimulationOptions = {
+  // Skaliert die Ruhelänge der Kanten (Darstellungs-Einstellung "Abstand").
+  restScale?: number;
+};
+
 // Ein Simulationsschritt (mutiert die Knoten). alpha ∈ (0..1] skaliert alle
 // Kräfte; der Aufrufer lässt es pro Frame abklingen, bis das Layout ruht.
-export function simulationStep(nodes: SimNode[], links: SimLink[], alpha: number) {
+export function simulationStep(
+  nodes: SimNode[],
+  links: SimLink[],
+  alpha: number,
+  { restScale = 1 }: SimulationOptions = {},
+) {
   // Abstoßung zwischen allen Paaren (O(n²) — für einige hundert Knoten ok).
   for (let i = 0; i < nodes.length; i++) {
     for (let j = i + 1; j < nodes.length; j++) {
@@ -245,7 +283,7 @@ export function simulationStep(nodes: SimNode[], links: SimLink[], alpha: number
     const dx = b.x - a.x;
     const dy = b.y - a.y;
     const dist = Math.max(Math.sqrt(dx * dx + dy * dy), 0.1);
-    const rest = LINK_REST[link.kind] + a.radius + b.radius;
+    const rest = (LINK_REST[link.kind] + a.radius + b.radius) * restScale;
     const force = (dist - rest) * LINK_STRENGTH[link.kind] * alpha;
     const fx = (dx / dist) * force;
     const fy = (dy / dist) * force;

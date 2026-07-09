@@ -2,6 +2,8 @@ import { account } from "@/lib/appwrite";
 import type { AiModelId } from "@/lib/ai-models";
 import type {
   BriefingTask,
+  GraphInsightNode,
+  GraphInsights,
   NoteEnhancementResult,
   NoteLinkCandidate,
   OpenTaskContext,
@@ -138,6 +140,42 @@ export async function extractPhotoText({
   }
 
   return payload.text;
+}
+
+export async function fetchGraphInsights({
+  modelId,
+  locale,
+  nodes,
+  edges,
+}: {
+  modelId: AiModelId;
+  locale: Locale;
+  nodes: GraphInsightNode[];
+  edges: Array<[number, number]>;
+}): Promise<GraphInsights> {
+  const payload = await authorizedJsonPost<GraphInsights>(
+    "/api/ai/graph-insights",
+    { modelId, locale, nodes, edges },
+    (status) =>
+      `Die Netz-Analyse ist fehlgeschlagen (${status}). Bitte prüfe die Konfiguration.`,
+  );
+
+  if (typeof payload.summary !== "string" || !payload.summary.trim()) {
+    throw new Error("Die Netz-Analyse hat kein Ergebnis geliefert.");
+  }
+
+  const list = (value: unknown) =>
+    Array.isArray(value)
+      ? value.filter((item): item is string => typeof item === "string")
+      : [];
+
+  return {
+    summary: payload.summary,
+    clusters: list(payload.clusters),
+    anomalies: list(payload.anomalies),
+    gaps: list(payload.gaps),
+    suggestions: list(payload.suggestions),
+  };
 }
 
 export async function fetchDailyBriefing({

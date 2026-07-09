@@ -6,12 +6,14 @@ import {
   DEFAULT_AI_MODEL_ID,
 } from "./ai-models.ts";
 import {
+  buildGraphInsightsFromProviderText,
   buildNoteEnhancementFromProviderText,
   callEnhanceProvider,
   enhanceNoteWithProvider,
   extractImageText,
   extractProviderText,
   generateDailyBriefing,
+  generateGraphInsights,
   parseProviderJson,
   resolveAiModelConfig,
   resolveTranscriptionConfig,
@@ -582,4 +584,127 @@ test("provider HTTP errors are surfaced clearly", async () => {
       }),
     /DeepSeek V4 Flash konnte nicht antworten \(429\): quota exceeded/,
   );
+});
+
+// ── Wissensnetz-Analyse ─────────────────────────────────────────────
+
+const INSIGHT_NODES = [
+  { title: "Tomaten vorziehen", tags: ["garten"], project: "Garten", degree: 2 },
+  { title: "Hochbeet planen", tags: ["garten"], project: "Garten", degree: 1 },
+  { title: "Steuer 2026", tags: [], project: null, degree: 0 },
+];
+
+test("graph insights parse validates summary and tolerates missing lists", () => {
+  const insights = buildGraphInsightsFromProviderText(
+    JSON.stringify({
+      summary: "Ein Garten-lastiges Netz.",
+      clusters: ["Garten: Tomaten vorziehen, Hochbeet planen"],
+      gaps: ["Steuer 2026 ist unverbunden", "", 42],
+    }),
+  );
+
+  assert.equal(insights.summary, "Ein Garten-lastiges Netz.");
+  assert.equal(insights.clusters.length, 1);
+  // Leere Strings und Nicht-Strings fliegen raus, fehlende Listen werden [].
+  assert.deepEqual(insights.gaps, ["Steuer 2026 ist unverbunden"]);
+  assert.deepEqual(insights.anomalies, []);
+  assert.deepEqual(insights.suggestions, []);
+});
+
+test("graph insights parse rejects payloads without summary", () => {
+  assert.throws(
+    () => buildGraphInsightsFromProviderText(JSON.stringify({ clusters: [] })),
+    /KI-Antwort/,
+  );
+});
+
+test("generateGraphInsights sends the graph as JSON and returns the analysis", async () => {
+  const requests = [];
+  const insights = await generateGraphInsights({
+    config: GLM_TEST_CONFIG,
+    nodes: INSIGHT_NODES,
+    edges: [[0, 1]],
+    locale: "de",
+    fetchFn: async (url, init) => {
+      requests.push({ url, body: JSON.parse(init.body) });
+      return chatReply(
+        JSON.stringify({
+          summary: "Kern ist der Garten.",
+          clusters: [],
+          anomalies: [],
+          gaps: ["Steuer 2026 hängt in der Luft."],
+          suggestions: ["Steuer mit einem Projekt verknüpfen."],
+        }),
+      );
+    },
+  });
+
+  assert.equal(insights.summary, "Kern ist der Garten.");
+  assert.deepEqual(insights.gaps, ["Steuer 2026 hängt in der Luft."]);
+
+  const prompt = requests[0].body.messages.at(-1).content;
+  assert.match(prompt, /Wissensnetz/);
+  assert.match(prompt, /Tomaten vorziehen/);
+  assert.match(prompt, /\[\[0,1\]\]/);
+  assert.equal(requests[0].body.response_format.type, "json_object");
+});
+
+test("generateGraphInsights retries once on unusable JSON", async () => {
+  let calls = 0;
+  const insights = await generateGraphInsights({
+    config: GLM_TEST_CONFIG,
+    nodes: INSIGHT_NODES,
+    edges: [],
+    fetchFn: async () => {
+      calls += 1;
+      if (calls === 1) return chatReply("kein json");
+      return chatReply(JSON.stringify({ summary: "Zweiter Versuch." }));
+    },
+  });
+
+  assert.equal(calls, 2);
+  assert.equal(insights.summary, "Zweiter Versuch.");
+});
+
+// ── Provider-Timeouts ───────────────────────────────────────────────
+
+test("provider calls carry an abort signal and map timeouts to a clear error", async () => {
+  let sawSignal = false;
+
+  await assert.rejects(
+    () =>
+      transcribeAudio({
+        audioBase64: "abc",
+        format: "wav",
+        env: { OPENROUTER_API_KEY: "key" },
+        timeoutMs: 50,
+        fetchFn: async (url, init) => {
+          sawSignal = init.signal instanceof AbortSignal;
+          throw new DOMException("The operation timed out", "TimeoutError");
+        },
+      }),
+    /zu lange gedauert/,
+  );
+  assert.ok(sawSignal, "fetch bekommt ein AbortSignal");
+});
+
+test("graph insights disable reasoning only for openrouter", async () => {
+  const bodies = [];
+  const reply = () => chatReply(JSON.stringify({ summary: "Ok." }));
+  const run = (baseUrl) =>
+    generateGraphInsights({
+      config: { ...GLM_TEST_CONFIG, baseUrl },
+      nodes: INSIGHT_NODES,
+      edges: [],
+      fetchFn: async (url, init) => {
+        bodies.push(JSON.parse(init.body));
+        return reply();
+      },
+    });
+
+  await run("https://openrouter.ai/api/v1");
+  await run("https://example.test/v1");
+
+  assert.deepEqual(bodies[0].reasoning, { enabled: false });
+  assert.equal(bodies[1].reasoning, undefined);
 });

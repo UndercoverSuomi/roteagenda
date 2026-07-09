@@ -206,3 +206,61 @@ test("dragged nodes stay pinned during simulation", () => {
 test("tag node ids are namespaced and cannot collide with note ids", () => {
   assert.notEqual(tagNodeId("a"), noteNodeId("a"));
 });
+
+test("projectIds filter keeps only notes of the selected projects", () => {
+  const graph = buildNoteGraph(
+    [
+      note("a", { projectId: "p1", relatedNoteIds: ["b"] }),
+      note("b", { projectId: "p2" }),
+      note("c"),
+    ],
+    PROJECTS,
+    { projectIds: ["p1"], includeTags: false },
+  );
+
+  assert.deepEqual(
+    graph.nodes.map((node) => node.refId),
+    ["a"],
+  );
+  // Kanten zu herausgefilterten Notizen verschwinden mit.
+  assert.equal(graph.links.length, 0);
+});
+
+test("query filters by title, tag and content — #query matches tags only", () => {
+  const notes = [
+    note("a", { title: "Tomaten vorziehen", tags: ["garten"] }),
+    note("b", { title: "Umzug planen", tags: ["kiste"], content: "Garten kündigen" }),
+    note("c", { title: "Steuer", tags: [] }),
+  ];
+
+  const byTitle = buildNoteGraph(notes, [], { query: "tomaten", includeTags: false });
+  assert.deepEqual(byTitle.nodes.map((node) => node.refId), ["a"]);
+
+  // Freitext trifft auch Tags und Inhalt (case-insensitiv).
+  const byText = buildNoteGraph(notes, [], { query: "GARTEN", includeTags: false });
+  assert.deepEqual(byText.nodes.map((node) => node.refId).sort(), ["a", "b"]);
+
+  // "#garten" trifft nur das Tag, nicht den Inhalt.
+  const byTag = buildNoteGraph(notes, [], { query: "#garten", includeTags: false });
+  assert.deepEqual(byTag.nodes.map((node) => node.refId), ["a"]);
+});
+
+test("restScale widens the settled layout", () => {
+  function settledDistance(restScale) {
+    const graph = buildNoteGraph([note("a", { relatedNoteIds: ["b"] }), note("b")], []);
+    const nodes = initSimNodes(graph, new Map());
+    const links = resolveLinks(nodes, graph.links);
+
+    let alpha = 1;
+    for (let i = 0; i < 300; i++) {
+      simulationStep(nodes, links, alpha, { restScale });
+      alpha = Math.max(alpha * 0.99, 0.05);
+    }
+
+    const a = nodes.find((node) => node.id === noteNodeId("a"));
+    const b = nodes.find((node) => node.id === noteNodeId("b"));
+    return Math.hypot(a.x - b.x, a.y - b.y);
+  }
+
+  assert.ok(settledDistance(1.6) > settledDistance(0.7));
+});

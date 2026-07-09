@@ -39,7 +39,13 @@ import { DesktopInsightPanel } from "@/components/ui/insight-panel";
 import { BottomNav, DesktopSidebar } from "@/components/ui/navigation";
 import { AppShellMessage, WorkSurface } from "@/components/ui/primitives";
 import { UndoToast } from "@/components/ui/undo-toast";
-import { enhanceNoteWithConfiguredAi, fetchDailyBriefing } from "@/lib/ai-client";
+import {
+  enhanceNoteWithConfiguredAi,
+  fetchDailyBriefing,
+  fetchGraphInsights,
+} from "@/lib/ai-client";
+import type { GraphInsights } from "@/lib/ai-server";
+import type { GraphAnalysisPayload } from "@/components/screens/graph-screen";
 import { fileToJpegBlob } from "@/lib/image";
 import { getAiModelLabel, MAX_NOTE_LENGTH, type AiModelId } from "@/lib/ai-models";
 import { createEmptyAppData } from "@/lib/app-data";
@@ -171,6 +177,10 @@ export function RoteAgendaApp() {
   const [briefing, setBriefing] = useState<string | null>(null);
   const [briefingError, setBriefingError] = useState<string | null>(null);
   const [isBriefingLoading, setIsBriefingLoading] = useState(false);
+  // KI-Analyse des Wissensnetzes (Graph-Screen).
+  const [graphInsights, setGraphInsights] = useState<GraphInsights | null>(null);
+  const [graphInsightsError, setGraphInsightsError] = useState<string | null>(null);
+  const [isAnalyzingGraph, setIsAnalyzingGraph] = useState(false);
   const [editingTask, setEditingTask] = useState<Task | null>(null);
   const [editingProject, setEditingProject] = useState<Project | null>(null);
   const [editingNote, setEditingNote] = useState<Note | null>(null);
@@ -1292,6 +1302,8 @@ export function RoteAgendaApp() {
     setUsedCachedData(false);
     setBriefing(null);
     setBriefingError(null);
+    setGraphInsights(null);
+    setGraphInsightsError(null);
     setCaptureNotice(null);
     setEnhanceOutcome(null);
     setEnhanceError(null);
@@ -1344,6 +1356,24 @@ export function RoteAgendaApp() {
   function handleThemeChange(preference: ThemePreference) {
     setThemePref(preference);
     storeTheme(preference);
+  }
+
+  async function handleAnalyzeGraph(payload: GraphAnalysisPayload) {
+    setGraphInsightsError(null);
+    setIsAnalyzingGraph(true);
+    try {
+      const insights = await fetchGraphInsights({
+        modelId: data.settings.aiModel,
+        locale,
+        nodes: payload.nodes,
+        edges: payload.edges,
+      });
+      setGraphInsights(insights);
+    } catch (error) {
+      setGraphInsightsError(readErrorMessage(error, t));
+    } finally {
+      setIsAnalyzingGraph(false);
+    }
   }
 
   async function handleGenerateBriefing() {
@@ -1497,9 +1527,14 @@ export function RoteAgendaApp() {
         <GraphScreen
           notes={data.notes}
           projects={data.projects}
+          insights={graphInsights}
+          insightsError={graphInsightsError}
+          isAnalyzing={isAnalyzingGraph}
           t={t}
           onBack={() => navigate("notes")}
           onOpenNote={openNote}
+          onAnalyze={(payload) => void handleAnalyzeGraph(payload)}
+          onDismissInsights={() => setGraphInsights(null)}
         />
       );
     }

@@ -13,7 +13,7 @@ Die Oberflaeche ist zuerst als responsives Webtool gedacht: schnell am Handy erf
 - Klingt etwas nach einem Termin ("Arzttermin Praxis41 morgen um 9"), schlaegt die KI einen Kalendereintrag mit Uhrzeit vor — Uebernahme geht an den Google Kalender — plus sinnvolle Vorbereitungs-Aufgaben als eigene Vorschlaege
 - Aufgabenvorschlaege pruefen, bearbeiten, uebernehmen oder ignorieren; die KI kennt Projekte und offene Aufgaben und schlaegt keine Duplikate vor
 - Notizen pinnen, taggen, durchsuchen und ueber verlinkte Notizen navigieren
-- Wissensnetz: alle Notizen als interaktiver Graph (wie in Obsidian) — Verlinkungen als Kanten, Tags optional als Themen-Knoten, Projektfarben, Zoom/Pan, Klick oeffnet die Notiz
+- Wissensnetz: alle Notizen als interaktiver Graph (wie in Obsidian) — Verlinkungen als Kanten, Tags optional als Themen-Knoten, Projektfarben, Zoom/Pan; Klick waehlt einen Knoten mit Info-Panel aus. Filter (Volltext/#tag, Projekte), Darstellungs-Einstellungen (Knotengroesse, Abstand, Beschriftungen, Farbhoefe) und eine KI-Analyse, die Cluster, Auffaelligkeiten und Luecken im Netz zusammenfasst
 - Tagesbriefing auf dem Heute-Screen: die KI fasst Ueberfaelliges und heute Faelliges kurz zusammen
 - Aufgaben abhaken, bearbeiten, per Schnellauswahl verschieben (heute/morgen/naechste Woche), Projekte anlegen und verwalten
 - Suche ueber Aufgaben, Projekte und Notizen (inkl. Tags und KI-Fassung)
@@ -97,7 +97,7 @@ MINIMAX_API_KEY=...
 DEEPSEEK_API_KEY=...
 ```
 
-Optionale Overrides fuer Base-URLs und Modell-Slugs stehen in [.env.example](.env.example). Alle KI-Routen (`/api/ai/enhance-note`, `/api/ai/transcribe`, `/api/ai/extract-image`, `/api/ai/daily-briefing`) verlangen eine gueltige Appwrite-Session (JWT), validieren und begrenzen ihre Eingaben und sind pro Nutzer gedrosselt. Link- und Foto-Notizen verarbeitet der asynchrone Notiz-Worker (siehe unten).
+Optionale Overrides fuer Base-URLs und Modell-Slugs stehen in [.env.example](.env.example). Alle KI-Routen (`/api/ai/enhance-note`, `/api/ai/transcribe`, `/api/ai/extract-image`, `/api/ai/daily-briefing`, `/api/ai/graph-insights`) verlangen eine gueltige Appwrite-Session (JWT), validieren und begrenzen ihre Eingaben und sind pro Nutzer gedrosselt. Link- und Foto-Notizen verarbeitet der asynchrone Notiz-Worker (siehe unten).
 
 ### 3. Notiz-Worker deployen (fuer Link-/Foto-Notizen)
 

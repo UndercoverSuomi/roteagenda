@@ -117,7 +117,7 @@ export default async ({ req, res, log, error }: Context) => {
       log(`Lese Foto ${fileId}`);
       const bytes = await storage.getFileDownload(BUCKET_ID, fileId);
       const imageBase64 = Buffer.from(bytes as ArrayBuffer).toString("base64");
-      content = await extractImageText({ imageBase64, locale });
+      content = await extractImageText({ imageBase64, locale, timeoutMs: OCR_TIMEOUT_MS });
     }
 
     // ── Phase 2: normale Veredelung mit Nutzer-Kontext ─────────────
@@ -145,6 +145,7 @@ export default async ({ req, res, log, error }: Context) => {
     const enhancementResult = await enhanceNoteWithProvider({
       config: resolved.config,
       noteId: String(doc.id ?? noteId),
+      timeoutMs: ENHANCE_TIMEOUT_MS,
       content,
       projects: projects.map((project) => ({
         id: String(project.id ?? project.$id),
@@ -288,6 +289,14 @@ async function listUserDocuments(
   return documents;
 }
 
+// Zeitbudgets innerhalb des 300-s-Function-Limits: bleibt ein Provider
+// hängen, degradiert der Worker sauber statt kommentarlos abgeschossen
+// zu werden (Notiz bliebe sonst ewig auf "wird analysiert").
+const VIDEO_TIMEOUT_MS = 200_000;
+const SUMMARY_TIMEOUT_MS = 60_000;
+const ENHANCE_TIMEOUT_MS = 90_000;
+const OCR_TIMEOUT_MS = 120_000;
+
 async function buildUrlContent(
   sourceUrl: string,
   aiModel: string,
@@ -301,6 +310,7 @@ async function buildUrlContent(
         title: meta?.title,
         author: meta?.author,
         locale,
+        timeoutMs: VIDEO_TIMEOUT_MS,
       });
       return { content, title: meta?.title ?? "" };
     } catch (videoError) {
@@ -336,6 +346,7 @@ async function buildUrlContent(
     url: page.finalUrl,
     title,
     locale,
+    timeoutMs: SUMMARY_TIMEOUT_MS,
   });
   return { content, title: title ?? "" };
 }

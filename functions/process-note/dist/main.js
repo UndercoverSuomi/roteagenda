@@ -181,26 +181,49 @@ function extractProviderText(payload) {
   if (chatText) return chatText;
   throw new Error("KI-Anbieter hat keinen Textinhalt zur\xFCckgegeben.");
 }
+var DEFAULT_PROVIDER_TIMEOUT_MS = 25e3;
+function mapTimeoutError(error) {
+  const name = typeof error === "object" && error !== null && "name" in error ? String(error.name) : "";
+  if (name === "TimeoutError" || name === "AbortError") {
+    return new Error(
+      "Die KI-Antwort hat zu lange gedauert. Bitte versuche es erneut \u2014 bei Fotos hilft ein kleinerer Ausschnitt, bei Videos ein k\xFCrzeres Video."
+    );
+  }
+  return error;
+}
+async function fetchWithTimeout(fetchFn, url, init, timeoutMs) {
+  try {
+    return await fetchFn(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
+  } catch (error) {
+    throw mapTimeoutError(error);
+  }
+}
 async function requestProvider(config, messages, options, fetchFn) {
+  const timeoutMs = options.timeoutMs ?? DEFAULT_PROVIDER_TIMEOUT_MS;
   if (config.provider === "openai-responses") {
     const input = messages.system ? `${messages.system}
 
 ${messages.user}` : messages.user;
-    return fetchFn("https://api.openai.com/v1/responses", {
-      method: "POST",
-      headers: providerHeaders(config.apiKey),
-      body: JSON.stringify({
-        model: config.model,
-        input: [
-          {
-            role: "user",
-            content: input
-          }
-        ],
-        max_output_tokens: options.maxTokens,
-        ...options.json ? { text: { format: { type: "json_object" } } } : {}
-      })
-    });
+    return fetchWithTimeout(
+      fetchFn,
+      "https://api.openai.com/v1/responses",
+      {
+        method: "POST",
+        headers: providerHeaders(config.apiKey),
+        body: JSON.stringify({
+          model: config.model,
+          input: [
+            {
+              role: "user",
+              content: input
+            }
+          ],
+          max_output_tokens: options.maxTokens,
+          ...options.json ? { text: { format: { type: "json_object" } } } : {}
+        })
+      },
+      timeoutMs
+    );
   }
   if (!config.baseUrl) {
     throw new Error(`${config.label} ist ohne Base URL konfiguriert.`);
@@ -210,16 +233,22 @@ ${messages.user}` : messages.user;
     chatMessages.push({ role: "system", content: messages.system });
   }
   chatMessages.push({ role: "user", content: messages.user });
-  return fetchFn(joinUrl(config.baseUrl, "chat/completions"), {
-    method: "POST",
-    headers: providerHeaders(config.apiKey),
-    body: JSON.stringify({
-      model: config.model,
-      messages: chatMessages,
-      max_tokens: options.maxTokens,
-      ...options.json ? { response_format: { type: "json_object" } } : {}
-    })
-  });
+  return fetchWithTimeout(
+    fetchFn,
+    joinUrl(config.baseUrl, "chat/completions"),
+    {
+      method: "POST",
+      headers: providerHeaders(config.apiKey),
+      body: JSON.stringify({
+        model: config.model,
+        messages: chatMessages,
+        max_tokens: options.maxTokens,
+        ...options.json ? { response_format: { type: "json_object" } } : {},
+        ...options.noReasoning && config.baseUrl.includes("openrouter") ? { reasoning: { enabled: false } } : {}
+      })
+    },
+    timeoutMs
+  );
 }
 async function callEnhanceProvider({
   config,
@@ -230,6 +259,7 @@ async function callEnhanceProvider({
   otherNotes = [],
   today,
   locale = "de",
+  timeoutMs,
   fetchFn = fetch
 }) {
   const prompt = buildEnhancePrompt(
@@ -245,7 +275,7 @@ async function callEnhanceProvider({
   const response = await requestProvider(
     config,
     { system, user: prompt },
-    { maxTokens: 2400, json: true },
+    { maxTokens: 2400, json: true, timeoutMs },
     fetchFn
   );
   const payload = await readJsonResponse(response, config.label);
@@ -523,7 +553,12 @@ function providerHeaders(apiKey) {
   };
 }
 async function readJsonResponse(response, providerLabel) {
-  const text = await response.text();
+  let text;
+  try {
+    text = await response.text();
+  } catch (error) {
+    throw mapTimeoutError(error);
+  }
   if (!response.ok) {
     throw new Error(
       `${providerLabel} konnte nicht antworten (${response.status}): ${readProviderError(text)}`
@@ -622,6 +657,7 @@ function resolveVideoConfig(env = process.env) {
 async function extractImageText({
   imageBase64,
   locale = "de",
+  timeoutMs = DEFAULT_PROVIDER_TIMEOUT_MS,
   env = process.env,
   fetchFn = fetch
 }) {
@@ -630,26 +666,31 @@ async function extractImageText({
     throw new Error(config.error);
   }
   const instruction = locale === "en" ? "Read this photo of a note (sticky note, whiteboard, notebook page) and extract the text it contains as a compact note. Put each task-like item on its own line. Return only the extracted text, without comments." : "Lies dieses Foto einer Notiz (Zettel, Whiteboard, Notizbuchseite) und extrahiere den enthaltenen Text als kompakte Notiz. Setze jeden aufgaben\xE4hnlichen Punkt in eine eigene Zeile. Gib ausschlie\xDFlich den extrahierten Text zur\xFCck, ohne Kommentare.";
-  const response = await fetchFn(joinUrl(config.baseUrl, "chat/completions"), {
-    method: "POST",
-    headers: providerHeaders(config.apiKey),
-    body: JSON.stringify({
-      model: config.model,
-      messages: [
-        {
-          role: "user",
-          content: [
-            { type: "text", text: instruction },
-            {
-              type: "image_url",
-              image_url: { url: `data:image/jpeg;base64,${imageBase64}` }
-            }
-          ]
-        }
-      ],
-      max_tokens: 1500
-    })
-  });
+  const response = await fetchWithTimeout(
+    fetchFn,
+    joinUrl(config.baseUrl, "chat/completions"),
+    {
+      method: "POST",
+      headers: providerHeaders(config.apiKey),
+      body: JSON.stringify({
+        model: config.model,
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: instruction },
+              {
+                type: "image_url",
+                image_url: { url: `data:image/jpeg;base64,${imageBase64}` }
+              }
+            ]
+          }
+        ],
+        max_tokens: 1500
+      })
+    },
+    timeoutMs
+  );
   const payload = await readJsonResponse(response, "Foto-Erkennung");
   const text = extractProviderText(payload).trim();
   if (!text) {
@@ -664,6 +705,7 @@ async function summarizeWebText({
   url,
   title,
   locale = "de",
+  timeoutMs,
   fetchFn = fetch
 }) {
   const text = pageText.slice(0, MAX_PAGE_TEXT);
@@ -689,7 +731,7 @@ async function summarizeWebText({
   const response = await requestProvider(
     config,
     { user: prompt.filter(Boolean).join("\n") },
-    { maxTokens: 600, json: false },
+    { maxTokens: 600, json: false, timeoutMs },
     fetchFn
   );
   const payload = await readJsonResponse(response, config.label);
@@ -704,6 +746,7 @@ async function summarizeYouTubeVideo({
   title,
   author,
   locale = "de",
+  timeoutMs = DEFAULT_PROVIDER_TIMEOUT_MS,
   env = process.env,
   fetchFn = fetch
 }) {
@@ -723,25 +766,30 @@ async function summarizeYouTubeVideo({
     "Reiner Text, keine Markdown-Syntax, keine Vorrede. Antworte auf Deutsch.",
     context ? `Video: ${context}` : ""
   ];
-  const response = await fetchFn(joinUrl(config.baseUrl, "chat/completions"), {
-    method: "POST",
-    headers: providerHeaders(config.apiKey),
-    body: JSON.stringify({
-      model: config.model,
-      messages: [
-        {
-          role: "user",
-          content: [
-            { type: "text", text: instruction.filter(Boolean).join("\n") },
-            { type: "video_url", video_url: { url } }
-          ]
-        }
-      ],
-      max_tokens: 800,
-      // Vertex akzeptiert keine Video-URLs — AI Studio bevorzugen.
-      provider: { order: ["google-ai-studio"] }
-    })
-  });
+  const response = await fetchWithTimeout(
+    fetchFn,
+    joinUrl(config.baseUrl, "chat/completions"),
+    {
+      method: "POST",
+      headers: providerHeaders(config.apiKey),
+      body: JSON.stringify({
+        model: config.model,
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: instruction.filter(Boolean).join("\n") },
+              { type: "video_url", video_url: { url } }
+            ]
+          }
+        ],
+        max_tokens: 800,
+        // Vertex akzeptiert keine Video-URLs — AI Studio bevorzugen.
+        provider: { order: ["google-ai-studio"] }
+      })
+    },
+    timeoutMs
+  );
   const payload = await readJsonResponse(response, "Video-Analyse");
   const summary = extractProviderText(payload).trim();
   if (!summary) {
@@ -985,7 +1033,7 @@ var main_default = async ({ req, res, log, error }) => {
       log(`Lese Foto ${fileId}`);
       const bytes = await storage.getFileDownload(BUCKET_ID, fileId);
       const imageBase64 = Buffer.from(bytes).toString("base64");
-      content = await extractImageText({ imageBase64, locale });
+      content = await extractImageText({ imageBase64, locale, timeoutMs: OCR_TIMEOUT_MS });
     }
     const resolved = resolveAiModelConfig(aiModel);
     if (!resolved.ok) {
@@ -1008,6 +1056,7 @@ var main_default = async ({ req, res, log, error }) => {
     const enhancementResult = await enhanceNoteWithProvider({
       config: resolved.config,
       noteId: String(doc.id ?? noteId),
+      timeoutMs: ENHANCE_TIMEOUT_MS,
       content,
       projects: projects.map((project) => ({
         id: String(project.id ?? project.$id),
@@ -1118,6 +1167,10 @@ async function listUserDocuments(databases, collectionId, marker) {
   }
   return documents;
 }
+var VIDEO_TIMEOUT_MS = 2e5;
+var SUMMARY_TIMEOUT_MS = 6e4;
+var ENHANCE_TIMEOUT_MS = 9e4;
+var OCR_TIMEOUT_MS = 12e4;
 async function buildUrlContent(sourceUrl, aiModel, locale) {
   if (parseYouTubeVideoId(sourceUrl)) {
     const meta = await fetchYouTubeOEmbed(sourceUrl);
@@ -1126,7 +1179,8 @@ async function buildUrlContent(sourceUrl, aiModel, locale) {
         url: sourceUrl,
         title: meta?.title,
         author: meta?.author,
-        locale
+        locale,
+        timeoutMs: VIDEO_TIMEOUT_MS
       });
       return { content: content2, title: meta?.title ?? "" };
     } catch (videoError) {
@@ -1157,7 +1211,8 @@ Die automatische Video-Analyse war nicht m\xF6glich${detail}.`;
     pageText,
     url: page.finalUrl,
     title,
-    locale
+    locale,
+    timeoutMs: SUMMARY_TIMEOUT_MS
   });
   return { content, title: title ?? "" };
 }
