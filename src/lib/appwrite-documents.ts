@@ -42,9 +42,13 @@ function restoreNullableFields(key: CollectionKey, item: Record<string, unknown>
   if (key === "projects") {
     // Bestandsprojekte ohne gespeicherte Farbe bekommen eine stabile Standardfarbe.
     data.color ??= colorForId(String(data.id ?? ""));
+    data.description ??= "";
+    // Ohne Default würde ein unbewachter .map()-Zugriff auf Altdaten crashen.
+    data.keywords ??= [];
   }
 
   if (key === "tasks") {
+    data.description ??= "";
     data.dueDate ??= null;
     data.sourceNoteId ??= null;
     data.googleSynced ??= null;
@@ -68,11 +72,13 @@ function restoreNullableFields(key: CollectionKey, item: Record<string, unknown>
 
   if (key === "suggestions") {
     data.kind ??= "task";
+    data.suggestedDescription ??= "";
     data.suggestedProjectId ??= null;
     data.suggestedNewProjectTitle ??= null;
     data.dueDate ??= null;
     data.eventStart ??= null;
     data.eventEnd ??= null;
+    data.reasoning ??= "";
   }
 
   return data;

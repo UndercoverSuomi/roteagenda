@@ -629,7 +629,9 @@ export function translate(
   key: MessageKey,
   params?: Record<string, string | number>,
 ) {
-  let text: string = messages[key][locale];
+  // Typsicherheit deckt nur statische Keys ab — bei dynamisch gebauten
+  // Keys (`theme.${option}` u. ä.) darf ein Lücken-Key nicht crashen.
+  let text: string = messages[key]?.[locale] ?? messages[key]?.de ?? String(key);
 
   if (params) {
     for (const [name, value] of Object.entries(params)) {

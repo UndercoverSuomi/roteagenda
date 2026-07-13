@@ -180,19 +180,10 @@ export default async ({ req, res, log, error }: Context) => {
 
     const { enhancement, suggestions } = enhancementResult;
 
-    await databases.updateDocument(DATABASE_ID, NOTES_ID, noteId, {
-      content: content.slice(0, 8000),
-      title: (enhancement.title || sourceTitle).slice(0, 250),
-      enhanced: enhancement.enhanced.slice(0, 19000),
-      tags: enhancement.tags,
-      projectId: enhancement.projectId ?? (doc.projectId as string | null) ?? null,
-      relatedNoteIds: enhancement.relatedNoteIds,
-      processed: true,
-      pendingFileId: null,
-      processingError: null,
-      updatedAt: now(),
-    });
-
+    // Vorschläge zuerst: Sobald die Notiz processed ist, läuft der Worker
+    // für sie nie wieder — ein danach gescheiterter Vorschlag wäre still
+    // und endgültig verloren.
+    let failedSuggestions = 0;
     for (const suggestion of suggestions) {
       try {
         await databases.createDocument(
@@ -203,12 +194,33 @@ export default async ({ req, res, log, error }: Context) => {
           (doc.$permissions as string[]) ?? [],
         );
       } catch (suggestionError) {
+        failedSuggestions += 1;
         error(`Vorschlag konnte nicht gespeichert werden: ${String(suggestionError)}`);
       }
     }
 
-    log(`Fertig: ${suggestions.length} Vorschläge`);
-    return res.json({ ok: true, suggestions: suggestions.length });
+    const suggestionWarning =
+      failedSuggestions === 0
+        ? null
+        : locale === "en"
+          ? `${failedSuggestions} of ${suggestions.length} suggestions could not be saved.`
+          : `${failedSuggestions} von ${suggestions.length} Vorschlägen konnten nicht gespeichert werden.`;
+
+    await databases.updateDocument(DATABASE_ID, NOTES_ID, noteId, {
+      content: content.slice(0, 8000),
+      title: (enhancement.title || sourceTitle).slice(0, 250),
+      enhanced: enhancement.enhanced.slice(0, 19000),
+      tags: enhancement.tags,
+      projectId: enhancement.projectId ?? (doc.projectId as string | null) ?? null,
+      relatedNoteIds: enhancement.relatedNoteIds,
+      processed: true,
+      pendingFileId: null,
+      processingError: suggestionWarning,
+      updatedAt: now(),
+    });
+
+    log(`Fertig: ${suggestions.length - failedSuggestions}/${suggestions.length} Vorschläge`);
+    return res.json({ ok: failedSuggestions === 0, suggestions: suggestions.length });
   } catch (workerError) {
     const message =
       workerError instanceof Error && workerError.message

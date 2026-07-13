@@ -48,8 +48,18 @@ export async function requireAppwriteUser(request: Request) {
 export function createRateLimiter(windowMs: number, maxRequests: number) {
   const requestLog = new Map<string, number[]>();
 
+  // Ohne Aufräumen wächst die Map pro je gesehener userId für immer.
+  function evictExpired(now: number) {
+    for (const [userId, timestamps] of requestLog) {
+      if (timestamps.every((timestamp) => now - timestamp >= windowMs)) {
+        requestLog.delete(userId);
+      }
+    }
+  }
+
   return function enforce(userId: string) {
     const now = Date.now();
+    evictExpired(now);
     const recent = (requestLog.get(userId) ?? []).filter(
       (timestamp) => now - timestamp < windowMs,
     );
