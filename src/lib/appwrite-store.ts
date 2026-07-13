@@ -6,6 +6,7 @@ import {
 } from "@/lib/appwrite-config";
 import {
   documentToItem,
+  toAppwriteData,
   type CollectionKey,
   type StoredItem,
 } from "@/lib/appwrite-documents";
@@ -183,12 +184,6 @@ function toAppUser(user: AppwriteUser): User {
     name: user.name || user.email,
     email: user.email,
   };
-}
-
-function toAppwriteData<T extends StoredItem>(item: T) {
-  return Object.fromEntries(
-    Object.entries(item).filter(([, value]) => value !== null),
-  ) as Record<string, unknown>;
 }
 
 function isNotFound(error: unknown) {

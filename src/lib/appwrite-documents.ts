@@ -22,6 +22,15 @@ export function documentToItem<T = Record<string, unknown>>(
   return restoreNullableFields(key, stripDocumentMetadata(document)) as T;
 }
 
+// Gegenstück zu restoreNullableFields: null-Felder werden nicht an
+// Appwrite geschickt (optionale Attribute), sondern beim Lesen wieder
+// als Defaults ergänzt.
+export function toAppwriteData<T extends StoredItem>(item: T) {
+  return Object.fromEntries(
+    Object.entries(item).filter(([, value]) => value !== null),
+  ) as Record<string, unknown>;
+}
+
 function stripDocumentMetadata(document: Record<string, unknown>) {
   const data = { ...document };
 

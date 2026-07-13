@@ -1,15 +1,18 @@
+// Relative Imports mit Endung, damit die Node-Tests die Datei laden können.
 import { Account, Client } from "appwrite";
 import {
   APPWRITE_ENDPOINT,
   APPWRITE_PROJECT_ID,
-} from "@/lib/appwrite-config";
+} from "./appwrite-config.ts";
 
 export class RouteError extends Error {
-  constructor(
-    message: string,
-    readonly status: number,
-  ) {
+  // Kein Parameter-Property: Nodes Type-Stripping (Tests) kann die
+  // Kurzform nicht laden.
+  readonly status: number;
+
+  constructor(message: string, status: number) {
     super(message);
+    this.status = status;
   }
 }
 
