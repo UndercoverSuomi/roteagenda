@@ -1,5 +1,17 @@
 # Appwrite Auth And AI Implementation Plan
 
+> **Status (2026-07-13): Vollständig umgesetzt — historisches Dokument.**
+> Alle Tasks sind seit den Commits `4ba4748` (Auth + AI) bis `115cf62`
+> (production-ready) live; die Kästchen unten sind nachträglich abgehakt.
+> Abweichungen gegenüber dem Plan:
+> - Die Route heißt `src/app/api/ai/enhance-note/route.ts` (nicht
+>   `process-note`); Link-/Foto-Notizen verarbeitet zusätzlich der
+>   asynchrone Worker `functions/process-note/` (Appwrite Function).
+> - `src/lib/mock-data.ts` wurde ersatzlos entfernt (kein Mock-Fallback);
+>   neue Accounts starten leer statt mit Seed-Daten.
+> - Inzwischen existieren vier weitere KI-Routen (transcribe,
+>   extract-image, daily-briefing, graph-insights) nach demselben Muster.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add Appwrite authentication, Appwrite-backed persistence, and centrally configured real AI model processing without a mock fallback.
@@ -17,20 +29,20 @@
 - Create: `src/lib/ai-server.ts`
 - Test: `src/lib/ai-server.test.mjs`
 
-- [ ] Define all allowed user-facing AI model IDs and labels.
-- [ ] Resolve API keys, base URLs, and overridable model slugs from environment variables.
-- [ ] Validate AI JSON output and return typed suggestions.
-- [ ] Test missing API keys and malformed JSON responses.
+- [x] Define all allowed user-facing AI model IDs and labels.
+- [x] Resolve API keys, base URLs, and overridable model slugs from environment variables.
+- [x] Validate AI JSON output and return typed suggestions.
+- [x] Test missing API keys and malformed JSON responses.
 
 ### Task 2: Server Route
 
 **Files:**
-- Create: `src/app/api/ai/process-note/route.ts`
+- Create: `src/app/api/ai/process-note/route.ts` *(umgesetzt als `enhance-note/route.ts`)*
 
-- [ ] Accept note text, enabled projects, and selected model.
-- [ ] Require an Appwrite JWT in the `Authorization` header.
-- [ ] Verify the JWT with Appwrite Account API.
-- [ ] Return structured suggestions or explicit JSON errors.
+- [x] Accept note text, enabled projects, and selected model.
+- [x] Require an Appwrite JWT in the `Authorization` header.
+- [x] Verify the JWT with Appwrite Account API.
+- [x] Return structured suggestions or explicit JSON errors.
 
 ### Task 3: Appwrite Persistence
 
@@ -38,24 +50,24 @@
 - Modify: `src/lib/types.ts`
 - Modify: `src/lib/appwrite.ts`
 - Create: `src/lib/appwrite-store.ts`
-- Modify: `src/lib/mock-data.ts`
+- Modify: `src/lib/mock-data.ts` *(stattdessen ersatzlos entfernt)*
 
-- [ ] Add user settings with selected AI model.
-- [ ] Load projects, tasks, raw notes, suggestions, and tags from Appwrite collections.
-- [ ] Seed new users once with initial data and persist it to Appwrite.
-- [ ] Synchronize changes to Appwrite without localStorage.
+- [x] Add user settings with selected AI model.
+- [x] Load projects, tasks, raw notes, suggestions, and tags from Appwrite collections.
+- [x] ~~Seed new users once with initial data and persist it to Appwrite.~~ *(Entscheidung: neue Accounts starten leer)*
+- [x] Synchronize changes to Appwrite without localStorage.
 
 ### Task 4: Auth And Settings UI
 
 **Files:**
 - Modify: `src/components/rote-agenda-app.tsx`
 
-- [ ] Add login and registration UI.
-- [ ] Load Appwrite data after login.
-- [ ] Save data changes to Appwrite.
-- [ ] Add settings controls for model selection.
-- [ ] Process capture notes through `/api/ai/process-note`.
-- [ ] Show clear setup/API/auth errors instead of falling back.
+- [x] Add login and registration UI.
+- [x] Load Appwrite data after login.
+- [x] Save data changes to Appwrite.
+- [x] Add settings controls for model selection.
+- [x] Process capture notes through `/api/ai/process-note` *(heute: `/api/ai/enhance-note`)*.
+- [x] Show clear setup/API/auth errors instead of falling back.
 
 ### Task 5: Documentation And Verification
 
@@ -63,6 +75,6 @@
 - Modify: `README.md`
 - Modify: `docs/appwrite-hosting.md`
 
-- [ ] Document Appwrite Auth, collection IDs, collection permissions, and environment variables.
-- [ ] Run `npm.cmd run lint`.
-- [ ] Run `npm.cmd run build`.
+- [x] Document Appwrite Auth, collection IDs, collection permissions, and environment variables.
+- [x] Run `npm.cmd run lint`.
+- [x] Run `npm.cmd run build`.
