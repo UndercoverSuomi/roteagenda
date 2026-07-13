@@ -418,6 +418,7 @@ test("transcription sends audio to an audio-capable openrouter model", async () 
   );
   assert.equal(audioPart.input_audio.data, "QUJD");
   assert.equal(audioPart.input_audio.format, "wav");
+  assert.deepEqual(body.reasoning, { enabled: false });
 });
 
 test("transcription model can be overridden via env", async () => {
@@ -443,6 +444,12 @@ test("photo extraction requires the openrouter key and sends the image", async (
   assert.equal(missing.ok, false);
   assert.match(missing.error, /OPENROUTER_API_KEY/);
 
+  // Der Default muss ein stabiles Vision-Modell sein — mimo-Provider
+  // hingen bei Bild-Anfragen regelmäßig bis ins Timeout.
+  const fallback = resolveVisionConfig({ OPENROUTER_API_KEY: "sk-or-test" });
+  assert.equal(fallback.ok, true);
+  assert.equal(fallback.model, "google/gemini-3.1-flash-lite");
+
   const calls = [];
   const text = await extractImageText({
     imageBase64: "QUJD",
@@ -463,6 +470,28 @@ test("photo extraction requires the openrouter key and sends the image", async (
   assert.equal(body.model, "google/gemini-2.5-pro");
   const imagePart = body.messages[0].content.find((part) => part.type === "image_url");
   assert.equal(imagePart.image_url.url, "data:image/jpeg;base64,QUJD");
+  // Reasoning aus + genug Budget: sonst frisst das "Denken" die max_tokens
+  // auf und textreiche Screenshots kommen leer oder abgeschnitten zurück.
+  assert.deepEqual(body.reasoning, { enabled: false });
+  assert.equal(body.max_tokens, 4000);
+});
+
+test("media calls omit the reasoning field for non-openrouter base urls", async () => {
+  const calls = [];
+  await extractImageText({
+    imageBase64: "QUJD",
+    env: {
+      OPENROUTER_API_KEY: "sk-proxy-test",
+      OPENROUTER_BASE_URL: "https://proxy.example.test/v1",
+    },
+    fetchFn: async (url, init) => {
+      calls.push({ url: String(url), init });
+      return chatReply("ok");
+    },
+  });
+
+  assert.equal(calls[0].url, "https://proxy.example.test/v1/chat/completions");
+  assert.equal(JSON.parse(calls[0].init.body).reasoning, undefined);
 });
 
 test("web summaries send capped page text without response_format", async () => {
@@ -511,6 +540,7 @@ test("youtube summaries send the video url to gemini via ai studio", async () =>
   const body = JSON.parse(calls[0].init.body);
   assert.equal(body.model, "google/gemini-3.1-flash-lite");
   assert.deepEqual(body.provider, { order: ["google-ai-studio"] });
+  assert.deepEqual(body.reasoning, { enabled: false });
   const videoPart = body.messages[0].content.find((part) => part.type === "video_url");
   assert.equal(videoPart.video_url.url, "https://www.youtube.com/watch?v=jNQXAC9IVRw");
   const textPart = body.messages[0].content.find((part) => part.type === "text");

@@ -888,7 +888,10 @@ function createId(prefix: string) {
 // MiMo-V2.5 (nicht -Pro!) kann Audio- UND Bild-Eingabe und ist deutlich
 // günstiger als Gemini 2.5 Flash. Override via Env möglich.
 const DEFAULT_TRANSCRIBE_MODEL = "xiaomi/mimo-v2.5";
-const DEFAULT_VISION_MODEL = "xiaomi/mimo-v2.5";
+// Nicht mimo: dessen OpenRouter-Provider hängen bei Bild-Anfragen häufig
+// bis ins Timeout (gemessen 3/4 Läufe), Gemini über Google antwortet
+// stabil in ~2 s bei praktisch gleichen Kosten pro Foto.
+const DEFAULT_VISION_MODEL = "google/gemini-3.1-flash-lite";
 // YouTube-URLs versteht via OpenRouter nur Gemini (Provider "Google AI
 // Studio"); 3.1 Flash Lite ist der Preis/Leistungs-Sweet-Spot (GA, 1M ctx).
 const DEFAULT_VIDEO_MODEL = "google/gemini-3.1-flash-lite";
@@ -1004,6 +1007,9 @@ export async function transcribeAudio({
           },
         ],
         max_tokens: 2000,
+        ...(config.baseUrl.includes("openrouter")
+          ? { reasoning: { enabled: false } }
+          : {}),
       }),
     },
     timeoutMs,
@@ -1033,8 +1039,8 @@ export async function extractImageText({
 
   const instruction =
     locale === "en"
-      ? "Read this photo of a note (sticky note, whiteboard, notebook page) and extract the text it contains as a compact note. Put each task-like item on its own line. Return only the extracted text, without comments."
-      : "Lies dieses Foto einer Notiz (Zettel, Whiteboard, Notizbuchseite) und extrahiere den enthaltenen Text als kompakte Notiz. Setze jeden aufgabenähnlichen Punkt in eine eigene Zeile. Gib ausschließlich den extrahierten Text zurück, ohne Kommentare.";
+      ? "Read this image (photo of a sticky note, whiteboard, notebook page, or a screenshot) and extract the text it contains as a compact note. Put each task-like item on its own line. Return only the extracted text, without comments."
+      : "Lies dieses Bild (Foto eines Zettels, Whiteboards, einer Notizbuchseite oder ein Screenshot) und extrahiere den enthaltenen Text als kompakte Notiz. Setze jeden aufgabenähnlichen Punkt in eine eigene Zeile. Gib ausschließlich den extrahierten Text zurück, ohne Kommentare.";
 
   const response = await fetchWithTimeout(
     fetchFn,
@@ -1056,7 +1062,13 @@ export async function extractImageText({
             ],
           },
         ],
-        max_tokens: 1500,
+        // Textreiche Screenshots brauchen Luft — und ohne abgeschaltetes
+        // Reasoning zählt sonst das "Denken" mit ins Budget, bis kein
+        // sichtbarer Text mehr übrig bleibt ("kein Text erkannt").
+        max_tokens: 4000,
+        ...(config.baseUrl.includes("openrouter")
+          ? { reasoning: { enabled: false } }
+          : {}),
       }),
     },
     timeoutMs,
@@ -1199,6 +1211,9 @@ export async function summarizeYouTubeVideo({
         max_tokens: 800,
         // Vertex akzeptiert keine Video-URLs — AI Studio bevorzugen.
         provider: { order: ["google-ai-studio"] },
+        ...(config.baseUrl.includes("openrouter")
+          ? { reasoning: { enabled: false } }
+          : {}),
       }),
     },
     timeoutMs,

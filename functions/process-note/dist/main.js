@@ -620,7 +620,7 @@ function extractChatCompletionsText(payload) {
 function createId(prefix) {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
-var DEFAULT_VISION_MODEL = "xiaomi/mimo-v2.5";
+var DEFAULT_VISION_MODEL = "google/gemini-3.1-flash-lite";
 var DEFAULT_VIDEO_MODEL = "google/gemini-3.1-flash-lite";
 function resolveOpenRouterMedia(env, modelEnvName, defaultModel, purpose) {
   const apiKey = env[OPENROUTER_KEY_ENV]?.trim();
@@ -665,7 +665,7 @@ async function extractImageText({
   if (!config.ok) {
     throw new Error(config.error);
   }
-  const instruction = locale === "en" ? "Read this photo of a note (sticky note, whiteboard, notebook page) and extract the text it contains as a compact note. Put each task-like item on its own line. Return only the extracted text, without comments." : "Lies dieses Foto einer Notiz (Zettel, Whiteboard, Notizbuchseite) und extrahiere den enthaltenen Text als kompakte Notiz. Setze jeden aufgaben\xE4hnlichen Punkt in eine eigene Zeile. Gib ausschlie\xDFlich den extrahierten Text zur\xFCck, ohne Kommentare.";
+  const instruction = locale === "en" ? "Read this image (photo of a sticky note, whiteboard, notebook page, or a screenshot) and extract the text it contains as a compact note. Put each task-like item on its own line. Return only the extracted text, without comments." : "Lies dieses Bild (Foto eines Zettels, Whiteboards, einer Notizbuchseite oder ein Screenshot) und extrahiere den enthaltenen Text als kompakte Notiz. Setze jeden aufgaben\xE4hnlichen Punkt in eine eigene Zeile. Gib ausschlie\xDFlich den extrahierten Text zur\xFCck, ohne Kommentare.";
   const response = await fetchWithTimeout(
     fetchFn,
     joinUrl(config.baseUrl, "chat/completions"),
@@ -686,7 +686,11 @@ async function extractImageText({
             ]
           }
         ],
-        max_tokens: 1500
+        // Textreiche Screenshots brauchen Luft — und ohne abgeschaltetes
+        // Reasoning zählt sonst das "Denken" mit ins Budget, bis kein
+        // sichtbarer Text mehr übrig bleibt ("kein Text erkannt").
+        max_tokens: 4e3,
+        ...config.baseUrl.includes("openrouter") ? { reasoning: { enabled: false } } : {}
       })
     },
     timeoutMs
@@ -785,7 +789,8 @@ async function summarizeYouTubeVideo({
         ],
         max_tokens: 800,
         // Vertex akzeptiert keine Video-URLs — AI Studio bevorzugen.
-        provider: { order: ["google-ai-studio"] }
+        provider: { order: ["google-ai-studio"] },
+        ...config.baseUrl.includes("openrouter") ? { reasoning: { enabled: false } } : {}
       })
     },
     timeoutMs

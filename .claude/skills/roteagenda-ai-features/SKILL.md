@@ -34,8 +34,13 @@ description: Neue KI-Funktion (Route, Provider-Aufruf, Client, Tests) nach dem e
 - Erst den **OpenRouter-Katalog prüfen**, nie aus dem Gedächtnis:
   `GET https://openrouter.ai/api/v1/models` → `architecture.input_modalities`
   (text/image/audio/video) und `pricing.prompt`/`pricing.completion`.
-- Medien-Default ist `xiaomi/mimo-v2.5` (Audio + Bild + Video, sehr günstig).
+- Audio-Default ist `xiaomi/mimo-v2.5` (sehr günstig); Bild- und Video-Default
+  ist `google/gemini-3.1-flash-lite` — mimo hing bei Bild-Anfragen über
+  OpenRouter häufig bis ins Timeout (Provider-Roulette, gemessen 2026-07).
   **Achtung: `xiaomi/mimo-v2.5-pro` ist text-only** — für Diktat/OCR unbrauchbar.
+- Bei Medien-Aufrufen über OpenRouter immer `reasoning: { enabled: false }`
+  mitsenden: Reasoning-Modelle verbrennen sonst das `max_tokens`-Budget mit
+  „Denken", bis kein sichtbarer Text mehr übrig ist („kein Text erkannt").
 - Multimodale Inhalte gehen als Content-Parts: `input_audio` (Base64 + Format)
   bzw. `image_url` mit `data:image/jpeg;base64,…`-URI.
 
