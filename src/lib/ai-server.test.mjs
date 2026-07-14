@@ -195,6 +195,73 @@ test("a full enhancement payload is normalized into note fields and suggestions"
   assert.equal(task.eventStart, null);
 });
 
+test("project suggestions are normalized without schedule fields", () => {
+  const result = buildNoteEnhancementFromProviderText({
+    providerText: enhancementPayload({
+      projectId: null,
+      suggestions: [
+        {
+          kind: "project",
+          suggestedTitle: "Japan-Reise",
+          suggestedDescription: "Planung und Ideen rund um die Reise nach Japan.",
+          // Halluzinierte Felder dürfen einen Projekt-Vorschlag nicht kippen.
+          suggestedProjectId: "project-halluziniert",
+          suggestedNewProjectTitle: null,
+          confidence: 0.85,
+          priority: "medium",
+          dueDate: "2026-08-01",
+          eventStart: null,
+          eventEnd: null,
+          reasoning: "Die Notiz sammelt Reiseideen ohne passendes Projekt.",
+          needsReview: false,
+        },
+      ],
+    }),
+    noteId: "note-self",
+    projectIds: ["project-1"],
+    otherNoteIds: [],
+    nowIso: "2026-07-07T12:00:00.000Z",
+    idFactory: (prefix) => `${prefix}-fixed`,
+  });
+
+  const [project] = result.suggestions;
+  assert.equal(project.kind, "project");
+  // Der Titel ist der Projektname und füllt suggestedNewProjectTitle.
+  assert.equal(project.suggestedTitle, "Japan-Reise");
+  assert.equal(project.suggestedNewProjectTitle, "Japan-Reise");
+  assert.equal(project.suggestedProjectId, null);
+  assert.equal(project.dueDate, null);
+  assert.equal(project.eventStart, null);
+  assert.equal(project.eventEnd, null);
+  assert.equal(project.state, "pending");
+});
+
+test("the enhancement prompt introduces project suggestions in both locales", async () => {
+  for (const [locale, marker] of [
+    ["de", /kind "project": Passt KEIN aktiviertes Projekt/],
+    ["en", /kind "project": if NO enabled project fits/],
+  ]) {
+    const calls = [];
+    await callEnhanceProvider({
+      config: GLM_TEST_CONFIG,
+      noteId: "note-1",
+      content: "Ideensammlung",
+      projects: [],
+      locale,
+      fetchFn: async (url, init) => {
+        calls.push(JSON.parse(init.body));
+        return chatReply(enhancementPayload());
+      },
+    });
+
+    const prompt = calls[0].messages[1].content;
+    assert.match(prompt, marker);
+    assert.match(prompt, /task \| event \| project/);
+    // Projekte sind ausdrücklich auch Kategorien für Nicht-Aufgaben.
+    assert.match(prompt, locale === "de" ? /Kategorisierungssystem/ : /categorization system/);
+  }
+});
+
 test("an empty suggestions list is a valid provider answer", () => {
   const result = buildNoteEnhancementFromProviderText({
     providerText: enhancementPayload(),

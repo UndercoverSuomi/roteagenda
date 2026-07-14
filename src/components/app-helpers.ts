@@ -54,6 +54,7 @@ export function buildAiStats(data: AppData): AiStats {
 
 export function suggestionStatusKey(suggestion: AiSuggestion): MessageKey {
   if (suggestion.kind === "event") return "sugg.status.event";
+  if (suggestion.kind === "project") return "sugg.status.project";
   if (suggestion.suggestedNewProjectTitle) return "sugg.status.newProject";
   if (suggestion.needsReview) return "sugg.status.review";
   if (suggestion.confidence < 0.75) return "sugg.status.unsure";

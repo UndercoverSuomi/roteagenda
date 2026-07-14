@@ -936,7 +936,77 @@ export function RoteAgendaApp() {
       void acceptEventSuggestion(suggestion);
       return;
     }
+    if (suggestion.kind === "project") {
+      acceptProjectSuggestion(suggestion);
+      return;
+    }
     acceptSuggestion(suggestion, createdBy);
+  }
+
+  // Projekt-Vorschlag: legt das Projekt an und ordnet die Quell-Notiz zu —
+  // Projekte kategorisieren auch reine Ideen-/Wissens-Notizen.
+  function acceptProjectSuggestion(suggestion: AiSuggestion) {
+    const now = new Date().toISOString();
+    const project: Project = {
+      id: createLocalId("project"),
+      title: suggestion.suggestedNewProjectTitle ?? suggestion.suggestedTitle,
+      description: suggestion.suggestedDescription,
+      keywords: suggestion.suggestedTitle
+        .toLowerCase()
+        .split(/\s+/)
+        .filter((word) => word.length > 4)
+        .slice(0, 6),
+      color: pickProjectColor(data.projects.length),
+      progress: 0,
+      aiEnabled: true,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    const sourceNote = data.notes.find((note) => note.id === suggestion.rawNoteId);
+    const updatedNote: Note | null = sourceNote
+      ? { ...sourceNote, projectId: project.id, updatedAt: now }
+      : null;
+    const acceptedSuggestion = {
+      ...suggestion,
+      state: "accepted" as const,
+      needsReview: false,
+    };
+
+    setData((current) => ({
+      ...current,
+      projects: [project, ...current.projects],
+      notes: updatedNote
+        ? current.notes.map((note) => (note.id === updatedNote.id ? updatedNote : note))
+        : current.notes,
+      suggestions: current.suggestions.map((item) =>
+        item.id === suggestion.id ? acceptedSuggestion : item,
+      ),
+    }));
+    setActiveSuggestions((current) =>
+      current.map((item) => (item.id === suggestion.id ? acceptedSuggestion : item)),
+    );
+    // In der Inbox bleiben (Stapel am Stück abarbeiten), sonst das neue
+    // Projekt direkt zeigen.
+    if (screen === "inbox") {
+      setSelectedProjectId(project.id);
+    } else {
+      goTo("project", { projectId: project.id });
+    }
+
+    persist(t("entity.projectNew"), {
+      kind: "upsert",
+      collection: "projects",
+      item: project,
+    });
+    if (updatedNote) {
+      persist(t("entity.note"), { kind: "upsert", collection: "notes", item: updatedNote });
+    }
+    persist(t("entity.suggestion"), {
+      kind: "upsert",
+      collection: "suggestions",
+      item: acceptedSuggestion,
+    });
   }
 
   function acceptSuggestion(suggestion: AiSuggestion, createdBy: "ai" | "user" = "ai") {

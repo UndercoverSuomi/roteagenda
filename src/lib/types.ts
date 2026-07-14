@@ -4,7 +4,7 @@ import type { Locale } from "@/lib/i18n";
 export type TaskStatus = "open" | "in_progress" | "done";
 export type TaskPriority = "low" | "medium" | "high";
 export type SuggestionState = "pending" | "accepted" | "rejected";
-export type SuggestionKind = "task" | "event";
+export type SuggestionKind = "task" | "event" | "project";
 export type GoogleSyncTarget = "calendar" | "tasks";
 export type NoteSource = "manual" | "capture" | "url" | "image";
 

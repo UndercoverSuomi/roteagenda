@@ -42,6 +42,7 @@ export function SuggestionCard({
 }) {
   const project = projects.find((item) => item.id === suggestion.suggestedProjectId);
   const isEvent = suggestion.kind === "event";
+  const isProject = suggestion.kind === "project";
 
   if (suggestion.state !== "pending") {
     return (
@@ -49,7 +50,9 @@ export function SuggestionCard({
         {suggestion.state === "accepted"
           ? isEvent
             ? t("sugg.eventAccepted")
-            : t("sugg.accepted")
+            : isProject
+              ? t("sugg.projectAccepted")
+              : t("sugg.accepted")
           : t("sugg.rejected")}
       </div>
     );
@@ -84,27 +87,39 @@ export function SuggestionCard({
       </div>
 
       <dl className="mt-4 grid grid-cols-2 gap-3 text-[12px]">
-        {isEvent && suggestion.eventStart ? (
-          <InfoTile
-            label={t("sugg.eventTime")}
-            value={formatEventTime(suggestion.eventStart, locale)}
-          />
-        ) : (
-          <InfoTile
-            label={t("sugg.deadline")}
-            value={formatDateLabel(suggestion.dueDate, locale)}
-          />
-        )}
-        <InfoTile
-          label={t("sugg.project")}
-          value={project?.title ?? suggestion.suggestedNewProjectTitle ?? t("sugg.unclear")}
-        />
-        {!isEvent ? (
+        {isProject ? (
           <>
-            <InfoTile label={t("sugg.priority")} value={t(priorityKeys[suggestion.priority])} />
+            <InfoTile label={t("sugg.project")} value={t("sugg.projectNewValue")} />
             <InfoTile label={t("sugg.source")} value={t("sugg.sourceValue")} />
           </>
-        ) : null}
+        ) : (
+          <>
+            {isEvent && suggestion.eventStart ? (
+              <InfoTile
+                label={t("sugg.eventTime")}
+                value={formatEventTime(suggestion.eventStart, locale)}
+              />
+            ) : (
+              <InfoTile
+                label={t("sugg.deadline")}
+                value={formatDateLabel(suggestion.dueDate, locale)}
+              />
+            )}
+            <InfoTile
+              label={t("sugg.project")}
+              value={project?.title ?? suggestion.suggestedNewProjectTitle ?? t("sugg.unclear")}
+            />
+            {!isEvent ? (
+              <>
+                <InfoTile
+                  label={t("sugg.priority")}
+                  value={t(priorityKeys[suggestion.priority])}
+                />
+                <InfoTile label={t("sugg.source")} value={t("sugg.sourceValue")} />
+              </>
+            ) : null}
+          </>
+        )}
       </dl>
 
       {!compact ? (
@@ -119,7 +134,11 @@ export function SuggestionCard({
           onClick={onAccept}
           className="rounded-[5px] bg-[var(--red)] px-3 py-3 text-[12px] font-bold text-white"
         >
-          {isEvent ? t("sugg.acceptEvent") : t("sugg.accept")}
+          {isEvent
+            ? t("sugg.acceptEvent")
+            : isProject
+              ? t("sugg.acceptProject")
+              : t("sugg.accept")}
         </button>
         <button
           type="button"
@@ -128,7 +147,7 @@ export function SuggestionCard({
         >
           {t("sugg.edit")}
         </button>
-        {!isEvent ? (
+        {!isEvent && !isProject ? (
           <>
             <button
               type="button"
@@ -173,16 +192,54 @@ function SuggestionEditor({
 }) {
   const [draft, setDraft] = useState(suggestion);
   const isEvent = draft.kind === "event";
+  const isProject = draft.kind === "project";
   const inputClass =
     "h-11 w-full rounded-[5px] border border-[var(--line)] bg-[var(--field)] px-3 text-[13px] outline-none";
 
   function handleSave() {
+    if (isProject) {
+      // Der Titel ist der Projektname — beide Felder synchron halten.
+      onSave({ ...draft, suggestedNewProjectTitle: draft.suggestedTitle });
+      return;
+    }
     if (isEvent && draft.eventStart) {
       // Termin-Datum konsistent halten.
       onSave({ ...draft, dueDate: draft.eventStart.slice(0, 10) });
       return;
     }
     onSave(draft);
+  }
+
+  if (isProject) {
+    return (
+      <article className="rounded-[7px] border border-[var(--line)] bg-[var(--surface-strong)] p-4 shadow-sm">
+        <Field label={t("sugg.newProjectLabel")}>
+          <input
+            value={draft.suggestedTitle}
+            onChange={(event) =>
+              setDraft((current) => ({ ...current, suggestedTitle: event.target.value }))
+            }
+            className={inputClass}
+          />
+        </Field>
+        <div className="mt-4 flex gap-2">
+          <button
+            type="button"
+            onClick={handleSave}
+            className="flex-1 rounded-[5px] bg-[var(--red)] px-3 py-3 text-[12px] font-bold text-white"
+          >
+            {t("common.save")}
+          </button>
+          <button
+            type="button"
+            onClick={onCancel}
+            className="flex-1 rounded-[5px] border border-[var(--line-strong)] px-3 py-3 text-[12px] font-bold"
+          >
+            {t("common.cancel")}
+          </button>
+        </div>
+      </article>
+    );
   }
 
   return (

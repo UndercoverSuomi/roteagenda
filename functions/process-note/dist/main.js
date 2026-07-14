@@ -382,7 +382,7 @@ function readSuggestionsPayload(payload) {
 function normalizeSuggestion(value, rawNoteId, createdAt, id) {
   const priority = readPriority(value.priority);
   const confidence = readConfidence(value.confidence);
-  const kind = value.kind === "event" ? "event" : "task";
+  const kind = value.kind === "event" ? "event" : value.kind === "project" ? "project" : "task";
   let dueDate = readNullableDate(value.dueDate);
   let eventStart = null;
   let eventEnd = null;
@@ -391,20 +391,45 @@ function normalizeSuggestion(value, rawNoteId, createdAt, id) {
     eventEnd = value.eventEnd === null || value.eventEnd === void 0 ? null : readEventTime(value.eventEnd, "eventEnd");
     dueDate = dueDate ?? eventStart.slice(0, 10);
   }
+  const suggestedTitle = readRequiredString(value.suggestedTitle, "suggestedTitle");
+  const suggestedNewProjectTitle = readNullableString(
+    value.suggestedNewProjectTitle,
+    "suggestedNewProjectTitle"
+  );
+  if (kind === "project") {
+    return {
+      id,
+      rawNoteId,
+      kind,
+      suggestedTitle,
+      suggestedDescription: readRequiredString(
+        value.suggestedDescription,
+        "suggestedDescription"
+      ),
+      suggestedProjectId: null,
+      suggestedNewProjectTitle: suggestedNewProjectTitle ?? suggestedTitle,
+      confidence,
+      priority,
+      dueDate: null,
+      eventStart: null,
+      eventEnd: null,
+      reasoning: readRequiredString(value.reasoning, "reasoning"),
+      needsReview: readBoolean(value.needsReview, "needsReview"),
+      state: "pending",
+      createdAt
+    };
+  }
   return {
     id,
     rawNoteId,
     kind,
-    suggestedTitle: readRequiredString(value.suggestedTitle, "suggestedTitle"),
+    suggestedTitle,
     suggestedDescription: readRequiredString(
       value.suggestedDescription,
       "suggestedDescription"
     ),
     suggestedProjectId: readNullableString(value.suggestedProjectId, "suggestedProjectId"),
-    suggestedNewProjectTitle: readNullableString(
-      value.suggestedNewProjectTitle,
-      "suggestedNewProjectTitle"
-    ),
+    suggestedNewProjectTitle,
     confidence,
     priority,
     dueDate,
@@ -471,7 +496,7 @@ function describeToday(todayIso, locale) {
   const weekday = WEEKDAY_NAMES[locale][(/* @__PURE__ */ new Date(`${iso}T12:00:00Z`)).getUTCDay()];
   return `${weekday}, ${iso}`;
 }
-var JSON_SHAPE = '{"title":"...","enhanced":"...","tags":["tag1","tag2"],"projectId":"project-id | null","relatedNoteIds":["note-id"],"suggestions":[{"kind":"task | event","suggestedTitle":"...","suggestedDescription":"...","suggestedProjectId":"project-id | null","suggestedNewProjectTitle":"... | null","confidence":0.0,"priority":"low|medium|high","dueDate":"YYYY-MM-DD | null","eventStart":"YYYY-MM-DDTHH:MM | null","eventEnd":"YYYY-MM-DDTHH:MM | null","reasoning":"...","needsReview":true}]}';
+var JSON_SHAPE = '{"title":"...","enhanced":"...","tags":["tag1","tag2"],"projectId":"project-id | null","relatedNoteIds":["note-id"],"suggestions":[{"kind":"task | event | project","suggestedTitle":"...","suggestedDescription":"...","suggestedProjectId":"project-id | null","suggestedNewProjectTitle":"... | null","confidence":0.0,"priority":"low|medium|high","dueDate":"YYYY-MM-DD | null","eventStart":"YYYY-MM-DDTHH:MM | null","eventEnd":"YYYY-MM-DDTHH:MM | null","reasoning":"...","needsReview":true}]}';
 var MAX_PROMPT_TASKS = 150;
 var MAX_PROMPT_TASK_TITLE = 120;
 var MAX_PROMPT_NOTES = 250;
@@ -512,14 +537,15 @@ function buildEnhancePrompt(content, projects, openTasks, existingTags, otherNot
       "- title: a concise heading (max 60 characters).",
       "- enhanced: the note rewritten cleanly and well structured. Preserve the content, invent nothing. Plain text with paragraphs and simple dashes, no markdown syntax.",
       "- tags: 3 to 5 short lowercase keywords \u2014 a single tag almost never captures a note fully, so always assign at least 3. Strongly prefer existing tags when they fit (consistent tags across notes form a knowledge network), but do invent a new precise tag when nothing existing truly matches.",
-      "- projectId: the id of the best-fitting enabled project, otherwise null.",
+      "- projectId: the id of the best-fitting enabled project, otherwise null. Projects are not just task containers but the app's categorization system for ideas, links, photos and knowledge notes too \u2014 assign generously whenever there is a genuine thematic fit.",
       "- relatedNoteIds: ids of ALL thematically related notes from the candidate list (max 8), otherwise an empty list. These links form a knowledge graph like in Obsidian \u2014 be generous with genuine thematic connections (same topic, person, place or project), but never invent links.",
       "About suggestions (0 to 4 entries):",
       '- kind "task": a concrete actionable task from the note. kind "event": an appointment with a recognizable date; set eventStart as local time YYYY-MM-DDTHH:MM (assume 09:00 if no time is given) and dueDate to the same date.',
       "- For an event, also propose sensible preparation tasks as separate task suggestions (e.g. bring documents).",
+      '- kind "project": if NO enabled project fits (projectId is null) but the note clearly belongs to a larger topic or undertaking (this applies to pure idea, link, video or photo notes as well), suggest exactly ONE new project: suggestedTitle is a concise project name, suggestedDescription one sentence describing its purpose, dueDate/eventStart/eventEnd null. Never suggest a project similar to an existing one, and skip the suggestion for one-off throwaway notes.',
       "- Convert relative expressions like today, tomorrow or Friday based on today's date.",
       "- Do not suggest tasks that already exist in the list of open tasks.",
-      "- If the note contains neither a task nor an event, return an empty suggestions list.",
+      "- If the note contains no task, no event and no project-worthy topic, return an empty suggestions list.",
       "Write every text in English.",
       ...tags.length ? ["Existing tags:", JSON.stringify(tags)] : [],
       ...noteCandidates.length ? ["Existing notes (id, title, tags, snippet):", JSON.stringify(noteCandidates)] : [],
@@ -539,14 +565,15 @@ function buildEnhancePrompt(content, projects, openTasks, existingTags, otherNot
     "- title: eine pr\xE4gnante \xDCberschrift (maximal 60 Zeichen).",
     "- enhanced: die Notiz sauber ausformuliert und gut strukturiert. Inhalt bewahren, nichts dazuerfinden. Reiner Text mit Abs\xE4tzen und einfachen Spiegelstrichen, keine Markdown-Syntax.",
     "- tags: 3 bis 5 kurze, kleingeschriebene Schlagw\xF6rter \u2014 ein einzelnes Tag greift fast immer zu kurz, vergib deshalb immer mindestens 3. Nutze bevorzugt vorhandene Tags, wenn sie passen (konsistente Tags \xFCber alle Notizen bilden ein Wissensnetz), aber erfinde ruhig ein treffendes neues, wenn keines wirklich passt.",
-    "- projectId: die ID des am besten passenden aktivierten Projekts, sonst null.",
+    "- projectId: die ID des am besten passenden aktivierten Projekts, sonst null. Projekte sind nicht nur Aufgaben-Container, sondern das Kategorisierungssystem der App \u2014 auch f\xFCr Ideen, Links, Fotos und Wissens-Notizen. Ordne gro\xDFz\xFCgig zu, sobald ein echter thematischer Bezug besteht.",
     "- relatedNoteIds: IDs ALLER thematisch verwandten Notizen aus der Kandidatenliste (maximal 8), sonst leere Liste. Diese Verkn\xFCpfungen bilden ein Wissensnetz wie in Obsidian \u2014 sei gro\xDFz\xFCgig bei echten thematischen Bez\xFCgen (gleiches Thema, Person, Ort oder Projekt), aber erfinde keine.",
     "Zu den Vorschl\xE4gen (suggestions, 0 bis 4 Eintr\xE4ge):",
     '- kind "task": eine konkrete Aufgabe aus der Notiz. kind "event": ein Termin mit erkennbarem Datum; setze eventStart als lokale Zeit YYYY-MM-DDTHH:MM (ohne erkennbare Uhrzeit 09:00 annehmen) und dueDate auf dasselbe Datum.',
     "- Zu einem Termin geh\xF6ren sinnvolle Vorbereitungs-Aufgaben als eigene task-Vorschl\xE4ge (z. B. Unterlagen mitnehmen).",
+    '- kind "project": Passt KEIN aktiviertes Projekt (projectId ist null), geh\xF6rt die Notiz aber klar zu einem gr\xF6\xDFeren Thema oder Vorhaben (auch reine Ideen-, Link-, Video- oder Foto-Notizen), schlage genau EIN neues Projekt vor: suggestedTitle ist ein pr\xE4gnanter Projektname, suggestedDescription ein Satz zum Zweck, dueDate/eventStart/eventEnd null. Schlage nie ein Projekt vor, das einem vorhandenen \xE4hnelt, und keines f\xFCr belanglose Wegwerf-Notizen.',
     "- Rechne relative Angaben wie heute, morgen oder Freitag vom heutigen Datum aus um.",
     "- Schlage keine Aufgabe vor, die bereits in der Liste offener Aufgaben existiert.",
-    "- Enth\xE4lt die Notiz weder Aufgabe noch Termin, gib eine leere suggestions-Liste zur\xFCck.",
+    "- Enth\xE4lt die Notiz weder Aufgabe noch Termin noch ein projektw\xFCrdiges Thema, gib eine leere suggestions-Liste zur\xFCck.",
     "Formuliere alle Texte auf Deutsch.",
     ...tags.length ? ["Vorhandene Tags:", JSON.stringify(tags)] : [],
     ...noteCandidates.length ? ["Vorhandene Notizen (id, title, tags, snippet):", JSON.stringify(noteCandidates)] : [],
