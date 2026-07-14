@@ -1,4 +1,5 @@
-import { account } from "@/lib/appwrite";
+import { account, functions } from "@/lib/appwrite";
+import { APPWRITE_NOTE_WORKER_FUNCTION_ID } from "@/lib/appwrite-config";
 import type { AiModelId } from "@/lib/ai-models";
 import type {
   BriefingTask,
@@ -204,6 +205,17 @@ export async function fetchGraphInsights({
     gaps: list(payload.gaps),
     suggestions: list(payload.suggestions),
   };
+}
+
+// Stößt die ausführliche Wissensnetz-Analyse im Notiz-Worker an (300-s-
+// Budget statt 25-s-Site-Limit). Das Ergebnis kommt per Realtime über
+// das graphInsights-Dokument des Nutzers — hier gibt es nichts zu holen.
+export async function requestDeepGraphInsights(): Promise<void> {
+  await functions.createExecution({
+    functionId: APPWRITE_NOTE_WORKER_FUNCTION_ID,
+    body: JSON.stringify({ type: "deep-graph-insights" }),
+    async: true,
+  });
 }
 
 export async function fetchDailyBriefing({

@@ -27,7 +27,8 @@ export function readCachedAppData(): CachedAppData | null {
   return {
     userId: value.userId,
     savedAt: typeof value.savedAt === "string" ? value.savedAt : "",
-    data: data as unknown as AppData,
+    // Später ergänzte Listen fehlen in alten Caches — defensiv auffüllen.
+    data: { deepInsights: [], ...data } as unknown as AppData,
   };
 }
 

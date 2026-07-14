@@ -79,6 +79,18 @@ function restoreNullableFields(key: CollectionKey, item: Record<string, unknown>
     data.updatedAt ??= data.createdAt ?? "";
   }
 
+  if (key === "deepInsights") {
+    data.status ??= "ready";
+    data.summary ??= "";
+    data.clusters ??= [];
+    data.anomalies ??= [];
+    data.gaps ??= [];
+    data.suggestions ??= [];
+    data.error ??= null;
+    data.noteCount ??= 0;
+    data.updatedAt ??= data.createdAt ?? "";
+  }
+
   if (key === "suggestions") {
     data.kind ??= "task";
     data.suggestedDescription ??= "";

@@ -92,7 +92,9 @@ const functionConfig = {
   timeout: TIMEOUT,
   enabled: true,
   logging: true,
-  execute: [],
+  // Angemeldete Nutzer dürfen die Function direkt ausführen — die App
+  // startet so die Graph-Tiefenanalyse (createExecution, async).
+  execute: ['users'],
   // Die App legt Notizen über die Sync-Queue per Upsert an; Appwrite feuert
   // dafür .upsert-Events, die der Event-Validator für Function-Trigger
   // (Cloud 1.9.5) aber nicht akzeptiert. Deshalb alle Dokument-Events der

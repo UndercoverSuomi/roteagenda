@@ -17,7 +17,16 @@ export const APPWRITE_COLLECTIONS = {
   notes: process.env.NEXT_PUBLIC_APPWRITE_RAW_NOTES_COLLECTION_ID || "rawNotes",
   suggestions:
     process.env.NEXT_PUBLIC_APPWRITE_SUGGESTIONS_COLLECTION_ID || "suggestions",
+  // Ausführliche Wissensnetz-Analyse (ein Dokument pro Nutzer, schreibt
+  // der Notiz-Worker).
+  deepInsights:
+    process.env.NEXT_PUBLIC_APPWRITE_GRAPH_INSIGHTS_COLLECTION_ID || "graphInsights",
 };
+
+// Appwrite Function des Notiz-Workers — verarbeitet Link-/Foto-Notizen
+// per DB-Event und die Graph-Tiefenanalyse per direkter Ausführung.
+export const APPWRITE_NOTE_WORKER_FUNCTION_ID =
+  process.env.NEXT_PUBLIC_APPWRITE_NOTE_WORKER_FUNCTION_ID || "process-note";
 
 // Storage-Bucket für hochgeladene Foto-Notizen (der Worker liest und
 // löscht die Dateien nach der Analyse).

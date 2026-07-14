@@ -9,13 +9,16 @@
 // Wird per esbuild gebündelt (npm run build:worker im Repo-Root) und teilt
 // sich die KI-/Web-Logik mit der App aus src/lib/.
 
-import { Client, Databases, Storage, Users, Query } from "node-appwrite";
+import { Client, Databases, ID, Storage, Users, Query } from "node-appwrite";
 import {
   enhanceNoteWithProvider,
   extractImageText,
+  generateGraphInsights,
+  MAX_INSIGHT_NODES,
   resolveAiModelConfig,
   summarizeWebText,
   summarizeYouTubeVideo,
+  type GraphInsightNode,
 } from "../../../src/lib/ai-server.ts";
 import { DEFAULT_AI_MODEL_ID, isAiModelId } from "../../../src/lib/ai-models.ts";
 import {
@@ -31,6 +34,7 @@ const NOTES_ID = process.env.APPWRITE_RAW_NOTES_COLLECTION_ID || "rawNotes";
 const SUGGESTIONS_ID = process.env.APPWRITE_SUGGESTIONS_COLLECTION_ID || "suggestions";
 const PROJECTS_ID = process.env.APPWRITE_PROJECTS_COLLECTION_ID || "projects";
 const TASKS_ID = process.env.APPWRITE_TASKS_COLLECTION_ID || "tasks";
+const INSIGHTS_ID = process.env.APPWRITE_GRAPH_INSIGHTS_COLLECTION_ID || "graphInsights";
 const BUCKET_ID = process.env.APPWRITE_MEDIA_BUCKET_ID || "noteMedia";
 
 type Context = {
@@ -41,11 +45,6 @@ type Context = {
 };
 
 export default async ({ req, res, log, error }: Context) => {
-  const doc = readDocument(req);
-  if (!doc || typeof doc.$id !== "string") {
-    return res.json({ skipped: "kein Dokument im Event" });
-  }
-
   const client = new Client()
     .setEndpoint(process.env.APPWRITE_FUNCTION_API_ENDPOINT ?? "")
     .setProject(process.env.APPWRITE_FUNCTION_PROJECT_ID ?? "")
@@ -53,6 +52,17 @@ export default async ({ req, res, log, error }: Context) => {
   const databases = new Databases(client);
   const storage = new Storage(client);
   const users = new Users(client);
+
+  // Direkte Ausführung aus der App (functions.createExecution) statt
+  // DB-Event: aktuell nur die Graph-Tiefenanalyse.
+  if ((req.headers["x-appwrite-trigger"] ?? "") === "http") {
+    return runDeepGraphInsights({ req, res, log, error }, databases, users);
+  }
+
+  const doc = readDocument(req);
+  if (!doc || typeof doc.$id !== "string") {
+    return res.json({ skipped: "kein Dokument im Event" });
+  }
 
   // Der Trigger lauscht auf ALLE Dokument-Events der Collection (der
   // Event-Validator kennt die .upsert-Events der App nicht einzeln).
@@ -243,6 +253,199 @@ export default async ({ req, res, log, error }: Context) => {
     return res.json({ ok: false, error: message });
   }
 };
+
+// Ausführliche Wissensnetz-Analyse ohne 25-s-Site-Limit: baut den Graph
+// aus allen Notizen des Nutzers, lässt die KI in Ruhe analysieren und
+// schreibt das Ergebnis in das eine graphInsights-Dokument des Nutzers —
+// die App zieht per Realtime nach.
+const DEEP_INSIGHTS_TIMEOUT_MS = 240_000;
+
+async function runDeepGraphInsights(
+  { req, res, log, error }: Context,
+  databases: Databases,
+  users: Users,
+) {
+  const payload = readDocument(req);
+  if (!payload || payload.type !== "deep-graph-insights") {
+    return res.json({ skipped: "unbekannter Auftrag" }, 400);
+  }
+
+  const userId = String(req.headers["x-appwrite-user-id"] ?? "");
+  if (!userId) {
+    return res.json({ error: "Die Tiefenanalyse braucht eine Nutzer-Sitzung." }, 401);
+  }
+
+  const marker = `user:${userId}`;
+  const permissions = [
+    `read("user:${userId}")`,
+    `update("user:${userId}")`,
+    `delete("user:${userId}")`,
+  ];
+  const now = () => new Date().toISOString();
+  let insightsDocId = "";
+
+  try {
+    const prefs = await users.getPrefs(userId).catch(() => ({}) as Record<string, unknown>);
+    const aiModel =
+      typeof prefs.aiModel === "string" && isAiModelId(prefs.aiModel)
+        ? prefs.aiModel
+        : DEFAULT_AI_MODEL_ID;
+    const locale = prefs.locale === "en" ? ("en" as const) : ("de" as const);
+    const resolved = resolveAiModelConfig(aiModel);
+    if (!resolved.ok) {
+      return res.json({ error: resolved.error }, 503);
+    }
+
+    // Genau ein Analyse-Dokument pro Nutzer: vorhandenes fortschreiben.
+    const existing = (await listUserDocuments(databases, INSIGHTS_ID, marker))[0];
+    if (existing) {
+      insightsDocId = String(existing.$id);
+      await databases.updateDocument(DATABASE_ID, INSIGHTS_ID, insightsDocId, {
+        status: "running",
+        error: null,
+        updatedAt: now(),
+      });
+    } else {
+      insightsDocId = ID.unique();
+      await databases.createDocument(
+        DATABASE_ID,
+        INSIGHTS_ID,
+        insightsDocId,
+        {
+          id: insightsDocId,
+          status: "running",
+          summary: "",
+          createdAt: now(),
+          updatedAt: now(),
+        },
+        permissions,
+      );
+    }
+
+    log(`Tiefenanalyse für ${userId} gestartet`);
+    const [projects, notes] = await Promise.all([
+      listUserDocuments(databases, PROJECTS_ID, marker),
+      listUserDocuments(databases, NOTES_ID, marker),
+    ]);
+
+    const graph = buildInsightGraph(notes, projects);
+    const insights = await generateGraphInsights({
+      config: resolved.config,
+      nodes: graph.nodes,
+      edges: graph.edges,
+      locale,
+      timeoutMs: DEEP_INSIGHTS_TIMEOUT_MS,
+      detail: true,
+    });
+
+    await databases.updateDocument(DATABASE_ID, INSIGHTS_ID, insightsDocId, {
+      status: "ready",
+      summary: insights.summary.slice(0, 19000),
+      clusters: insights.clusters.map((item) => item.slice(0, 1900)),
+      anomalies: insights.anomalies.map((item) => item.slice(0, 1900)),
+      gaps: insights.gaps.map((item) => item.slice(0, 1900)),
+      suggestions: insights.suggestions.map((item) => item.slice(0, 1900)),
+      error: null,
+      noteCount: notes.length,
+      updatedAt: now(),
+    });
+
+    log(`Tiefenanalyse fertig: ${notes.length} Notizen`);
+    return res.json({ ok: true, notes: notes.length });
+  } catch (workerError) {
+    const message =
+      workerError instanceof Error && workerError.message
+        ? workerError.message
+        : "Unbekannter Fehler bei der Tiefenanalyse.";
+    error(message);
+
+    if (insightsDocId) {
+      try {
+        await databases.updateDocument(DATABASE_ID, INSIGHTS_ID, insightsDocId, {
+          status: "error",
+          error: message.slice(0, 1000),
+          updatedAt: now(),
+        });
+      } catch (updateError) {
+        error(`Fehlerstatus konnte nicht gespeichert werden: ${String(updateError)}`);
+      }
+    }
+
+    return res.json({ ok: false, error: message });
+  }
+}
+
+// Notizen als Knoten, relatedNoteIds als ungerichtete Kanten; bei mehr
+// als MAX_INSIGHT_NODES gewinnen die zentralsten (statt beliebiger)
+// Notizen — sortiert nach Vernetzungsgrad, dann Aktualität.
+function buildInsightGraph(
+  notes: Record<string, unknown>[],
+  projects: Record<string, unknown>[],
+): { nodes: GraphInsightNode[]; edges: Array<[number, number]> } {
+  const idToIndex = new Map<string, number>();
+  notes.forEach((note, index) => {
+    idToIndex.set(String(note.id ?? note.$id), index);
+  });
+
+  const edgeKeys = new Set<string>();
+  let edges: Array<[number, number]> = [];
+  notes.forEach((note, from) => {
+    const related = Array.isArray(note.relatedNoteIds) ? note.relatedNoteIds : [];
+    for (const target of related) {
+      const to = idToIndex.get(String(target));
+      if (to === undefined || to === from) continue;
+      const [a, b] = from < to ? [from, to] : [to, from];
+      const key = `${a}-${b}`;
+      if (edgeKeys.has(key)) continue;
+      edgeKeys.add(key);
+      edges.push([a, b]);
+    }
+  });
+
+  const degrees = new Array<number>(notes.length).fill(0);
+  for (const [a, b] of edges) {
+    degrees[a] += 1;
+    degrees[b] += 1;
+  }
+
+  const projectTitles = new Map(
+    projects.map((project) => [String(project.id ?? project.$id), String(project.title ?? "")]),
+  );
+
+  let order = notes.map((_, index) => index);
+  if (notes.length > MAX_INSIGHT_NODES) {
+    order = [...order]
+      .sort((a, b) => {
+        if (degrees[b] !== degrees[a]) return degrees[b] - degrees[a];
+        return String(notes[b].createdAt ?? "").localeCompare(String(notes[a].createdAt ?? ""));
+      })
+      .slice(0, MAX_INSIGHT_NODES);
+
+    const remap = new Map<number, number>();
+    order.forEach((oldIndex, newIndex) => remap.set(oldIndex, newIndex));
+    edges = edges.flatMap(([a, b]) => {
+      const na = remap.get(a);
+      const nb = remap.get(b);
+      return na !== undefined && nb !== undefined ? [[na, nb] as [number, number]] : [];
+    });
+  }
+
+  const nodes = order.map((index) => {
+    const note = notes[index];
+    const projectId = typeof note.projectId === "string" ? note.projectId : "";
+    return {
+      title:
+        String(note.title || "").trim() ||
+        String(note.content ?? "").slice(0, 60).trim() ||
+        "Notiz",
+      tags: Array.isArray(note.tags) ? (note.tags as string[]).slice(0, 8) : [],
+      project: projectId ? (projectTitles.get(projectId) ?? null) : null,
+      degree: degrees[index],
+    };
+  });
+
+  return { nodes, edges };
+}
 
 function readDocument(req: Context["req"]): Record<string, unknown> | null {
   const candidate = req.bodyJson ?? req.body;

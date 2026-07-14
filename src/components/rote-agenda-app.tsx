@@ -43,6 +43,7 @@ import {
   enhanceNoteWithConfiguredAi,
   fetchDailyBriefing,
   fetchGraphInsights,
+  requestDeepGraphInsights,
 } from "@/lib/ai-client";
 import type { GraphInsights } from "@/lib/ai-server";
 import type { GraphAnalysisPayload } from "@/components/screens/graph-screen";
@@ -1604,11 +1605,13 @@ export function RoteAgendaApp() {
           insights={graphInsights}
           insightsError={graphInsightsError}
           isAnalyzing={isAnalyzingGraph}
+          deepInsights={data.deepInsights[0] ?? null}
           t={t}
           onBack={() => navigate("notes")}
           onOpenNote={openNote}
           onAnalyze={(payload) => void handleAnalyzeGraph(payload)}
           onDismissInsights={() => setGraphInsights(null)}
+          onRequestDeepAnalysis={requestDeepGraphInsights}
         />
       );
     }

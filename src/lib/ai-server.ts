@@ -1369,12 +1369,15 @@ type GraphInsightsParams = {
   edges: Array<[number, number]>;
   locale?: Locale;
   timeoutMs?: number;
+  // Tiefenanalyse des Workers: ausführlichere Antwort ohne 25-s-Druck.
+  detail?: boolean;
   fetchFn?: typeof fetch;
 };
 
 export const MAX_INSIGHT_NODES = 250;
 export const MAX_INSIGHT_EDGES = 800;
 const MAX_INSIGHT_LIST_ITEMS = 6;
+const MAX_DETAIL_LIST_ITEMS = 12;
 
 const INSIGHTS_JSON_SHAPE =
   '{"summary":"...","clusters":["..."],"anomalies":["..."],"gaps":["..."],"suggestions":["..."]}';
@@ -1383,6 +1386,7 @@ function buildInsightsPrompt(
   nodes: GraphInsightNode[],
   edges: Array<[number, number]>,
   locale: Locale,
+  detail = false,
 ) {
   const compact = nodes.slice(0, MAX_INSIGHT_NODES).map((node) => ({
     t: node.title.slice(0, 80),
@@ -1398,11 +1402,22 @@ function buildInsightsPrompt(
       "notes as nodes (t=title, g=tags, p=project, d=number of connections) and note-to-note links as index pairs into the node list.",
       "Respond exclusively with valid JSON in this shape:",
       INSIGHTS_JSON_SHAPE,
-      "- summary: 2-4 sentences describing what this knowledge graph revolves around as a whole.",
-      "- clusters: the main thematic clusters with their central notes (max 5 entries).",
-      "- anomalies: notable patterns, e.g. surprising bridges between topics, unusual hubs, duplicate or synonymous tags (max 5).",
-      "- gaps: gaps in the graph: isolated notes or groups, obvious but missing links, topics without a project (max 5).",
-      "- suggestions: concrete next steps to improve the graph (max 4).",
+      ...(detail
+        ? [
+            "This is the DEEP analysis — take your time and be thorough:",
+            "- summary: 1-2 substantial paragraphs describing what this knowledge graph revolves around, how its themes relate, and how it has been developing.",
+            "- clusters: every real thematic cluster with its central notes and what holds it together (max 12 entries, 1-3 sentences each).",
+            "- anomalies: notable patterns, e.g. surprising bridges between topics, unusual hubs, duplicate or synonymous tags — explain why each is notable (max 12).",
+            "- gaps: isolated notes or groups, obvious but missing links, topics without a project — name the affected notes (max 12).",
+            "- suggestions: concrete, actionable next steps to improve the graph, most valuable first (max 8).",
+          ]
+        : [
+            "- summary: 2-4 sentences describing what this knowledge graph revolves around as a whole.",
+            "- clusters: the main thematic clusters with their central notes (max 5 entries).",
+            "- anomalies: notable patterns, e.g. surprising bridges between topics, unusual hubs, duplicate or synonymous tags (max 5).",
+            "- gaps: gaps in the graph: isolated notes or groups, obvious but missing links, topics without a project (max 5).",
+            "- suggestions: concrete next steps to improve the graph (max 4).",
+          ]),
       "Be specific and reference note titles. Never invent notes. Empty lists are allowed. Write every text in English.",
       "Graph (JSON):",
       JSON.stringify({ nodes: compact, edges: compactEdges }),
@@ -1414,18 +1429,32 @@ function buildInsightsPrompt(
     "Notizen als Knoten (t=Titel, g=Tags, p=Projekt, d=Anzahl Verbindungen) und Notiz-zu-Notiz-Verlinkungen als Indexpaare in die Knotenliste.",
     "Antworte ausschließlich mit gültigem JSON in dieser Form:",
     INSIGHTS_JSON_SHAPE,
-    "- summary: 2-4 Sätze: worum kreist dieses Wissensnetz insgesamt.",
-    "- clusters: die wichtigsten Themen-Cluster mit ihren zentralen Notizen (maximal 5 Einträge).",
-    "- anomalies: Auffälligkeiten, z. B. überraschende Brücken zwischen Themen, ungewöhnliche Knotenpunkte, doppelte oder synonyme Tags (maximal 5).",
-    "- gaps: Lücken im Netz: isolierte Notizen oder Gruppen, naheliegende aber fehlende Verbindungen, Themen ohne Projekt (maximal 5).",
-    "- suggestions: konkrete nächste Schritte für ein besseres Netz (maximal 4).",
+    ...(detail
+      ? [
+          "Dies ist die TIEFENANALYSE — nimm dir Zeit und sei gründlich:",
+          "- summary: 1-2 gehaltvolle Absätze: worum kreist dieses Wissensnetz, wie hängen die Themen zusammen, wie entwickelt es sich.",
+          "- clusters: jedes echte Themen-Cluster mit seinen zentralen Notizen und dem, was es zusammenhält (maximal 12 Einträge, je 1-3 Sätze).",
+          "- anomalies: Auffälligkeiten, z. B. überraschende Brücken zwischen Themen, ungewöhnliche Knotenpunkte, doppelte oder synonyme Tags — begründe jeweils, warum das auffällt (maximal 12).",
+          "- gaps: isolierte Notizen oder Gruppen, naheliegende aber fehlende Verbindungen, Themen ohne Projekt — nenne die betroffenen Notizen (maximal 12).",
+          "- suggestions: konkrete, umsetzbare nächste Schritte für ein besseres Netz, das Wertvollste zuerst (maximal 8).",
+        ]
+      : [
+          "- summary: 2-4 Sätze: worum kreist dieses Wissensnetz insgesamt.",
+          "- clusters: die wichtigsten Themen-Cluster mit ihren zentralen Notizen (maximal 5 Einträge).",
+          "- anomalies: Auffälligkeiten, z. B. überraschende Brücken zwischen Themen, ungewöhnliche Knotenpunkte, doppelte oder synonyme Tags (maximal 5).",
+          "- gaps: Lücken im Netz: isolierte Notizen oder Gruppen, naheliegende aber fehlende Verbindungen, Themen ohne Projekt (maximal 5).",
+          "- suggestions: konkrete nächste Schritte für ein besseres Netz (maximal 4).",
+        ]),
     "Sei konkret und beziehe dich auf Notiz-Titel. Erfinde keine Notizen. Leere Listen sind erlaubt. Formuliere alle Texte auf Deutsch.",
     "Netz (JSON):",
     JSON.stringify({ nodes: compact, edges: compactEdges }),
   ].join("\n");
 }
 
-export function buildGraphInsightsFromProviderText(providerText: string): GraphInsights {
+export function buildGraphInsightsFromProviderText(
+  providerText: string,
+  maxItems = MAX_INSIGHT_LIST_ITEMS,
+): GraphInsights {
   const payload = parseProviderJson(providerText);
   if (!isRecord(payload)) {
     throw new Error("KI-Antwort enthält kein gültiges Objekt.");
@@ -1433,14 +1462,14 @@ export function buildGraphInsightsFromProviderText(providerText: string): GraphI
 
   return {
     summary: readRequiredString(payload.summary, "summary"),
-    clusters: readInsightList(payload.clusters),
-    anomalies: readInsightList(payload.anomalies),
-    gaps: readInsightList(payload.gaps),
-    suggestions: readInsightList(payload.suggestions),
+    clusters: readInsightList(payload.clusters, maxItems),
+    anomalies: readInsightList(payload.anomalies, maxItems),
+    gaps: readInsightList(payload.gaps, maxItems),
+    suggestions: readInsightList(payload.suggestions, maxItems),
   };
 }
 
-function readInsightList(value: unknown): string[] {
+function readInsightList(value: unknown, maxItems: number): string[] {
   if (value === undefined || value === null) return [];
   if (!Array.isArray(value)) {
     throw new Error("KI-Antwort enthält eine ungültige Liste.");
@@ -1449,7 +1478,7 @@ function readInsightList(value: unknown): string[] {
   return value
     .filter((item): item is string => typeof item === "string" && Boolean(item.trim()))
     .map((item) => item.trim())
-    .slice(0, MAX_INSIGHT_LIST_ITEMS);
+    .slice(0, maxItems);
 }
 
 // Analyse-Lauf mit einem Wiederholungsversuch bei unbrauchbarem JSON —
@@ -1460,9 +1489,10 @@ export async function generateGraphInsights({
   edges,
   locale = "de",
   timeoutMs,
+  detail = false,
   fetchFn = fetch,
 }: GraphInsightsParams): Promise<GraphInsights> {
-  const prompt = buildInsightsPrompt(nodes, edges, locale);
+  const prompt = buildInsightsPrompt(nodes, edges, locale, detail);
   const system =
     locale === "en"
       ? "You analyze knowledge graphs of notes and respond exclusively with JSON."
@@ -1476,12 +1506,15 @@ export async function generateGraphInsights({
         { system, user: prompt },
         // 1000 Tokens reichten bei großen Netzen nicht: Antworten endeten
         // mit finish_reason "length" mitten im JSON → Parse-Fehler → Retry
-        // → Timeout-Kette.
-        { maxTokens: 2500, json: true, timeoutMs, noReasoning: true },
+        // → Timeout-Kette. Die Tiefenanalyse darf deutlich länger schreiben.
+        { maxTokens: detail ? 6000 : 2500, json: true, timeoutMs, noReasoning: true },
         fetchFn,
       );
       const payload = await readJsonResponse(response, config.label);
-      return buildGraphInsightsFromProviderText(extractProviderText(payload));
+      return buildGraphInsightsFromProviderText(
+        extractProviderText(payload),
+        detail ? MAX_DETAIL_LIST_ITEMS : MAX_INSIGHT_LIST_ITEMS,
+      );
     } catch (error) {
       lastError = error;
       const retryable =

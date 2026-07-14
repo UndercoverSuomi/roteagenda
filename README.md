@@ -13,7 +13,8 @@ Die Oberflaeche ist zuerst als responsives Webtool gedacht: schnell am Handy erf
 - Klingt etwas nach einem Termin ("Arzttermin Praxis41 morgen um 9"), schlaegt die KI einen Kalendereintrag mit Uhrzeit vor — Uebernahme geht an den Google Kalender — plus sinnvolle Vorbereitungs-Aufgaben als eigene Vorschlaege
 - Aufgabenvorschlaege pruefen, bearbeiten, uebernehmen oder ignorieren; die KI kennt Projekte und offene Aufgaben und schlaegt keine Duplikate vor
 - Notizen pinnen, taggen, durchsuchen und ueber verlinkte Notizen navigieren
-- Wissensnetz: alle Notizen als interaktiver Graph (wie in Obsidian) — Verlinkungen als Kanten, Tags optional als Themen-Knoten, Projektfarben, Zoom/Pan; Klick waehlt einen Knoten mit Info-Panel aus. Filter (Volltext/#tag, Projekte), Darstellungs-Einstellungen (Knotengroesse, Abstand, Beschriftungen, Farbhoefe) und eine KI-Analyse, die Cluster, Auffaelligkeiten und Luecken im Netz zusammenfasst
+- Wissensnetz: alle Notizen als interaktiver Graph (wie in Obsidian) — Verlinkungen als Kanten, Tags optional als Themen-Knoten, Projektfarben, Zoom/Pan; Klick waehlt einen Knoten mit Info-Panel aus. Filter (Volltext/#tag, Projekte), Darstellungs-Einstellungen (Knotengroesse, Abstand, Beschriftungen, Farbhoefe) und eine schnelle KI-Analyse, die Cluster, Auffaelligkeiten und Luecken im Netz zusammenfasst. Zusaetzlich eine Tiefenanalyse ueber den Notiz-Worker (300 s statt 25-s-Site-Limit): deutlich ausfuehrlichere Auswertung, laeuft im Hintergrund, Ergebnis erscheint per Realtime und bleibt gespeichert
+- Die KI schlaegt bei Notizen ohne passendes Projekt ein neues Projekt vor (Inbox-Vorschlag, ein Klick legt es an und ordnet die Notiz zu) — Projekte kategorisieren auch reine Ideen-, Link-, Video- und Foto-Notizen, nicht nur Aufgaben
 - Tagesbriefing auf dem Heute-Screen: die KI fasst Ueberfaelliges und heute Faelliges kurz zusammen
 - Aufgaben abhaken, bearbeiten, per Schnellauswahl verschieben (heute/morgen/naechste Woche), Projekte anlegen und verwalten
 - Suche ueber Aufgaben, Projekte und Notizen (inkl. Tags und KI-Fassung)
@@ -67,7 +68,7 @@ npm install
 APPWRITE_API_KEY=<api-key> node scripts/setup-appwrite.mjs
 ```
 
-Das Script legt idempotent die Datenbank `roteagenda` mit den vier Collections `projects`, `tasks`, `rawNotes` und `suggestions` samt Attributen an und schreibt die IDs in `.env.local`. Da der Code dieselben IDs als Defaults nutzt, sind abweichende Environment Variables nur noch bei eigenen IDs noetig.
+Das Script legt idempotent die Datenbank `roteagenda` mit den fuenf Collections `projects`, `tasks`, `rawNotes`, `graphInsights` und `suggestions` samt Attributen an und schreibt die IDs in `.env.local`. Da der Code dieselben IDs als Defaults nutzt, sind abweichende Environment Variables nur noch bei eigenen IDs noetig.
 
 Nach einem Update mit Schema-Aenderungen das Script einfach erneut ausfuehren — es ergaenzt nur fehlende Attribute. Wichtig: Die Notiz-Features (Titel, Tags, Verlinkung, Pinnen) und Terminvorschlaege brauchen die neuen Attribute in `rawNotes` und `suggestions`; ohne erneuten Script-Lauf schlagen Notiz-Speicherungen mit einem Sync-Fehler fehl.
 

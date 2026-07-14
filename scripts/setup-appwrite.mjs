@@ -107,6 +107,24 @@ const COLLECTIONS = [
     ],
   },
   {
+    // Ausführliche Wissensnetz-Analyse des Notiz-Workers (1 Dokument/Nutzer).
+    id: "graphInsights",
+    attributes: [
+      string("id", 64),
+      string("status", 16, false),
+      // ≥ 16384 → TEXT-Spalte, zählt nicht gegen das MariaDB-Zeilenlimit.
+      string("summary", 20000, false),
+      string("clusters", 2000, false, true),
+      string("anomalies", 2000, false, true),
+      string("gaps", 2000, false, true),
+      string("suggestions", 2000, false, true),
+      string("error", 1024, false),
+      integer("noteCount", false),
+      string("createdAt", 32),
+      string("updatedAt", 32, false),
+    ],
+  },
+  {
     id: "suggestions",
     attributes: [
       string("id", 64),

@@ -17,5 +17,6 @@ export function createEmptyAppData(locale: Locale = "de"): AppData {
     tasks: [],
     notes: [],
     suggestions: [],
+    deepInsights: [],
   };
 }

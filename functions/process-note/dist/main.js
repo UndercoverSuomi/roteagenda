@@ -1,5 +1,5 @@
 // functions/process-note/src/main.ts
-import { Client, Databases, Storage, Users, Query } from "node-appwrite";
+import { Client, Databases, ID, Storage, Users, Query } from "node-appwrite";
 
 // src/lib/ai-models.ts
 var AI_MODEL_OPTIONS = [
@@ -841,6 +841,124 @@ async function summarizeYouTubeVideo({
   }
   return summary;
 }
+var MAX_INSIGHT_NODES = 250;
+var MAX_INSIGHT_EDGES = 800;
+var MAX_INSIGHT_LIST_ITEMS = 6;
+var MAX_DETAIL_LIST_ITEMS = 12;
+var INSIGHTS_JSON_SHAPE = '{"summary":"...","clusters":["..."],"anomalies":["..."],"gaps":["..."],"suggestions":["..."]}';
+function buildInsightsPrompt(nodes, edges, locale, detail = false) {
+  const compact = nodes.slice(0, MAX_INSIGHT_NODES).map((node) => ({
+    t: node.title.slice(0, 80),
+    g: node.tags.slice(0, MAX_TAGS),
+    p: node.project,
+    d: node.degree
+  }));
+  const compactEdges = edges.slice(0, MAX_INSIGHT_EDGES);
+  if (locale === "en") {
+    return [
+      "You are the analysis AI of the note app Rote Agenda. You are looking at a user's knowledge graph:",
+      "notes as nodes (t=title, g=tags, p=project, d=number of connections) and note-to-note links as index pairs into the node list.",
+      "Respond exclusively with valid JSON in this shape:",
+      INSIGHTS_JSON_SHAPE,
+      ...detail ? [
+        "This is the DEEP analysis \u2014 take your time and be thorough:",
+        "- summary: 1-2 substantial paragraphs describing what this knowledge graph revolves around, how its themes relate, and how it has been developing.",
+        "- clusters: every real thematic cluster with its central notes and what holds it together (max 12 entries, 1-3 sentences each).",
+        "- anomalies: notable patterns, e.g. surprising bridges between topics, unusual hubs, duplicate or synonymous tags \u2014 explain why each is notable (max 12).",
+        "- gaps: isolated notes or groups, obvious but missing links, topics without a project \u2014 name the affected notes (max 12).",
+        "- suggestions: concrete, actionable next steps to improve the graph, most valuable first (max 8)."
+      ] : [
+        "- summary: 2-4 sentences describing what this knowledge graph revolves around as a whole.",
+        "- clusters: the main thematic clusters with their central notes (max 5 entries).",
+        "- anomalies: notable patterns, e.g. surprising bridges between topics, unusual hubs, duplicate or synonymous tags (max 5).",
+        "- gaps: gaps in the graph: isolated notes or groups, obvious but missing links, topics without a project (max 5).",
+        "- suggestions: concrete next steps to improve the graph (max 4)."
+      ],
+      "Be specific and reference note titles. Never invent notes. Empty lists are allowed. Write every text in English.",
+      "Graph (JSON):",
+      JSON.stringify({ nodes: compact, edges: compactEdges })
+    ].join("\n");
+  }
+  return [
+    "Du bist die Analyse-KI der Notiz-App Rote Agenda. Vor dir liegt das Wissensnetz einer Nutzerin/eines Nutzers:",
+    "Notizen als Knoten (t=Titel, g=Tags, p=Projekt, d=Anzahl Verbindungen) und Notiz-zu-Notiz-Verlinkungen als Indexpaare in die Knotenliste.",
+    "Antworte ausschlie\xDFlich mit g\xFCltigem JSON in dieser Form:",
+    INSIGHTS_JSON_SHAPE,
+    ...detail ? [
+      "Dies ist die TIEFENANALYSE \u2014 nimm dir Zeit und sei gr\xFCndlich:",
+      "- summary: 1-2 gehaltvolle Abs\xE4tze: worum kreist dieses Wissensnetz, wie h\xE4ngen die Themen zusammen, wie entwickelt es sich.",
+      "- clusters: jedes echte Themen-Cluster mit seinen zentralen Notizen und dem, was es zusammenh\xE4lt (maximal 12 Eintr\xE4ge, je 1-3 S\xE4tze).",
+      "- anomalies: Auff\xE4lligkeiten, z. B. \xFCberraschende Br\xFCcken zwischen Themen, ungew\xF6hnliche Knotenpunkte, doppelte oder synonyme Tags \u2014 begr\xFCnde jeweils, warum das auff\xE4llt (maximal 12).",
+      "- gaps: isolierte Notizen oder Gruppen, naheliegende aber fehlende Verbindungen, Themen ohne Projekt \u2014 nenne die betroffenen Notizen (maximal 12).",
+      "- suggestions: konkrete, umsetzbare n\xE4chste Schritte f\xFCr ein besseres Netz, das Wertvollste zuerst (maximal 8)."
+    ] : [
+      "- summary: 2-4 S\xE4tze: worum kreist dieses Wissensnetz insgesamt.",
+      "- clusters: die wichtigsten Themen-Cluster mit ihren zentralen Notizen (maximal 5 Eintr\xE4ge).",
+      "- anomalies: Auff\xE4lligkeiten, z. B. \xFCberraschende Br\xFCcken zwischen Themen, ungew\xF6hnliche Knotenpunkte, doppelte oder synonyme Tags (maximal 5).",
+      "- gaps: L\xFCcken im Netz: isolierte Notizen oder Gruppen, naheliegende aber fehlende Verbindungen, Themen ohne Projekt (maximal 5).",
+      "- suggestions: konkrete n\xE4chste Schritte f\xFCr ein besseres Netz (maximal 4)."
+    ],
+    "Sei konkret und beziehe dich auf Notiz-Titel. Erfinde keine Notizen. Leere Listen sind erlaubt. Formuliere alle Texte auf Deutsch.",
+    "Netz (JSON):",
+    JSON.stringify({ nodes: compact, edges: compactEdges })
+  ].join("\n");
+}
+function buildGraphInsightsFromProviderText(providerText, maxItems = MAX_INSIGHT_LIST_ITEMS) {
+  const payload = parseProviderJson(providerText);
+  if (!isRecord(payload)) {
+    throw new Error("KI-Antwort enth\xE4lt kein g\xFCltiges Objekt.");
+  }
+  return {
+    summary: readRequiredString(payload.summary, "summary"),
+    clusters: readInsightList(payload.clusters, maxItems),
+    anomalies: readInsightList(payload.anomalies, maxItems),
+    gaps: readInsightList(payload.gaps, maxItems),
+    suggestions: readInsightList(payload.suggestions, maxItems)
+  };
+}
+function readInsightList(value, maxItems) {
+  if (value === void 0 || value === null) return [];
+  if (!Array.isArray(value)) {
+    throw new Error("KI-Antwort enth\xE4lt eine ung\xFCltige Liste.");
+  }
+  return value.filter((item) => typeof item === "string" && Boolean(item.trim())).map((item) => item.trim()).slice(0, maxItems);
+}
+async function generateGraphInsights({
+  config,
+  nodes,
+  edges,
+  locale = "de",
+  timeoutMs,
+  detail = false,
+  fetchFn = fetch
+}) {
+  const prompt = buildInsightsPrompt(nodes, edges, locale, detail);
+  const system = locale === "en" ? "You analyze knowledge graphs of notes and respond exclusively with JSON." : "Du analysierst Wissensnetze aus Notizen und antwortest ausschlie\xDFlich mit JSON.";
+  let lastError;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const response = await requestProvider(
+        config,
+        { system, user: prompt },
+        // 1000 Tokens reichten bei großen Netzen nicht: Antworten endeten
+        // mit finish_reason "length" mitten im JSON → Parse-Fehler → Retry
+        // → Timeout-Kette. Die Tiefenanalyse darf deutlich länger schreiben.
+        { maxTokens: detail ? 6e3 : 2500, json: true, timeoutMs, noReasoning: true },
+        fetchFn
+      );
+      const payload = await readJsonResponse(response, config.label);
+      return buildGraphInsightsFromProviderText(
+        extractProviderText(payload),
+        detail ? MAX_DETAIL_LIST_ITEMS : MAX_INSIGHT_LIST_ITEMS
+      );
+    } catch (error) {
+      lastError = error;
+      const retryable = error instanceof Error && error.message.startsWith("KI-Antwort");
+      if (!retryable) throw error;
+    }
+  }
+  throw lastError;
+}
 
 // src/lib/web-content.ts
 import { lookup as dnsLookup } from "node:dns/promises";
@@ -1027,16 +1145,20 @@ var NOTES_ID = process.env.APPWRITE_RAW_NOTES_COLLECTION_ID || "rawNotes";
 var SUGGESTIONS_ID = process.env.APPWRITE_SUGGESTIONS_COLLECTION_ID || "suggestions";
 var PROJECTS_ID = process.env.APPWRITE_PROJECTS_COLLECTION_ID || "projects";
 var TASKS_ID = process.env.APPWRITE_TASKS_COLLECTION_ID || "tasks";
+var INSIGHTS_ID = process.env.APPWRITE_GRAPH_INSIGHTS_COLLECTION_ID || "graphInsights";
 var BUCKET_ID = process.env.APPWRITE_MEDIA_BUCKET_ID || "noteMedia";
 var main_default = async ({ req, res, log, error }) => {
-  const doc = readDocument(req);
-  if (!doc || typeof doc.$id !== "string") {
-    return res.json({ skipped: "kein Dokument im Event" });
-  }
   const client = new Client().setEndpoint(process.env.APPWRITE_FUNCTION_API_ENDPOINT ?? "").setProject(process.env.APPWRITE_FUNCTION_PROJECT_ID ?? "").setKey(req.headers["x-appwrite-key"] ?? "");
   const databases = new Databases(client);
   const storage = new Storage(client);
   const users = new Users(client);
+  if ((req.headers["x-appwrite-trigger"] ?? "") === "http") {
+    return runDeepGraphInsights({ req, res, log, error }, databases, users);
+  }
+  const doc = readDocument(req);
+  if (!doc || typeof doc.$id !== "string") {
+    return res.json({ skipped: "kein Dokument im Event" });
+  }
   const eventName = req.headers["x-appwrite-event"] ?? "";
   if (eventName.endsWith(".delete")) {
     await cleanupFile(storage, doc);
@@ -1172,6 +1294,153 @@ var main_default = async ({ req, res, log, error }) => {
     return res.json({ ok: false, error: message });
   }
 };
+var DEEP_INSIGHTS_TIMEOUT_MS = 24e4;
+async function runDeepGraphInsights({ req, res, log, error }, databases, users) {
+  const payload = readDocument(req);
+  if (!payload || payload.type !== "deep-graph-insights") {
+    return res.json({ skipped: "unbekannter Auftrag" }, 400);
+  }
+  const userId = String(req.headers["x-appwrite-user-id"] ?? "");
+  if (!userId) {
+    return res.json({ error: "Die Tiefenanalyse braucht eine Nutzer-Sitzung." }, 401);
+  }
+  const marker = `user:${userId}`;
+  const permissions = [
+    `read("user:${userId}")`,
+    `update("user:${userId}")`,
+    `delete("user:${userId}")`
+  ];
+  const now = () => (/* @__PURE__ */ new Date()).toISOString();
+  let insightsDocId = "";
+  try {
+    const prefs = await users.getPrefs(userId).catch(() => ({}));
+    const aiModel = typeof prefs.aiModel === "string" && isAiModelId(prefs.aiModel) ? prefs.aiModel : DEFAULT_AI_MODEL_ID;
+    const locale = prefs.locale === "en" ? "en" : "de";
+    const resolved = resolveAiModelConfig(aiModel);
+    if (!resolved.ok) {
+      return res.json({ error: resolved.error }, 503);
+    }
+    const existing = (await listUserDocuments(databases, INSIGHTS_ID, marker))[0];
+    if (existing) {
+      insightsDocId = String(existing.$id);
+      await databases.updateDocument(DATABASE_ID, INSIGHTS_ID, insightsDocId, {
+        status: "running",
+        error: null,
+        updatedAt: now()
+      });
+    } else {
+      insightsDocId = ID.unique();
+      await databases.createDocument(
+        DATABASE_ID,
+        INSIGHTS_ID,
+        insightsDocId,
+        {
+          id: insightsDocId,
+          status: "running",
+          summary: "",
+          createdAt: now(),
+          updatedAt: now()
+        },
+        permissions
+      );
+    }
+    log(`Tiefenanalyse f\xFCr ${userId} gestartet`);
+    const [projects, notes] = await Promise.all([
+      listUserDocuments(databases, PROJECTS_ID, marker),
+      listUserDocuments(databases, NOTES_ID, marker)
+    ]);
+    const graph = buildInsightGraph(notes, projects);
+    const insights = await generateGraphInsights({
+      config: resolved.config,
+      nodes: graph.nodes,
+      edges: graph.edges,
+      locale,
+      timeoutMs: DEEP_INSIGHTS_TIMEOUT_MS,
+      detail: true
+    });
+    await databases.updateDocument(DATABASE_ID, INSIGHTS_ID, insightsDocId, {
+      status: "ready",
+      summary: insights.summary.slice(0, 19e3),
+      clusters: insights.clusters.map((item) => item.slice(0, 1900)),
+      anomalies: insights.anomalies.map((item) => item.slice(0, 1900)),
+      gaps: insights.gaps.map((item) => item.slice(0, 1900)),
+      suggestions: insights.suggestions.map((item) => item.slice(0, 1900)),
+      error: null,
+      noteCount: notes.length,
+      updatedAt: now()
+    });
+    log(`Tiefenanalyse fertig: ${notes.length} Notizen`);
+    return res.json({ ok: true, notes: notes.length });
+  } catch (workerError) {
+    const message = workerError instanceof Error && workerError.message ? workerError.message : "Unbekannter Fehler bei der Tiefenanalyse.";
+    error(message);
+    if (insightsDocId) {
+      try {
+        await databases.updateDocument(DATABASE_ID, INSIGHTS_ID, insightsDocId, {
+          status: "error",
+          error: message.slice(0, 1e3),
+          updatedAt: now()
+        });
+      } catch (updateError) {
+        error(`Fehlerstatus konnte nicht gespeichert werden: ${String(updateError)}`);
+      }
+    }
+    return res.json({ ok: false, error: message });
+  }
+}
+function buildInsightGraph(notes, projects) {
+  const idToIndex = /* @__PURE__ */ new Map();
+  notes.forEach((note, index) => {
+    idToIndex.set(String(note.id ?? note.$id), index);
+  });
+  const edgeKeys = /* @__PURE__ */ new Set();
+  let edges = [];
+  notes.forEach((note, from) => {
+    const related = Array.isArray(note.relatedNoteIds) ? note.relatedNoteIds : [];
+    for (const target of related) {
+      const to = idToIndex.get(String(target));
+      if (to === void 0 || to === from) continue;
+      const [a, b] = from < to ? [from, to] : [to, from];
+      const key = `${a}-${b}`;
+      if (edgeKeys.has(key)) continue;
+      edgeKeys.add(key);
+      edges.push([a, b]);
+    }
+  });
+  const degrees = new Array(notes.length).fill(0);
+  for (const [a, b] of edges) {
+    degrees[a] += 1;
+    degrees[b] += 1;
+  }
+  const projectTitles = new Map(
+    projects.map((project) => [String(project.id ?? project.$id), String(project.title ?? "")])
+  );
+  let order = notes.map((_, index) => index);
+  if (notes.length > MAX_INSIGHT_NODES) {
+    order = [...order].sort((a, b) => {
+      if (degrees[b] !== degrees[a]) return degrees[b] - degrees[a];
+      return String(notes[b].createdAt ?? "").localeCompare(String(notes[a].createdAt ?? ""));
+    }).slice(0, MAX_INSIGHT_NODES);
+    const remap = /* @__PURE__ */ new Map();
+    order.forEach((oldIndex, newIndex) => remap.set(oldIndex, newIndex));
+    edges = edges.flatMap(([a, b]) => {
+      const na = remap.get(a);
+      const nb = remap.get(b);
+      return na !== void 0 && nb !== void 0 ? [[na, nb]] : [];
+    });
+  }
+  const nodes = order.map((index) => {
+    const note = notes[index];
+    const projectId = typeof note.projectId === "string" ? note.projectId : "";
+    return {
+      title: String(note.title || "").trim() || String(note.content ?? "").slice(0, 60).trim() || "Notiz",
+      tags: Array.isArray(note.tags) ? note.tags.slice(0, 8) : [],
+      project: projectId ? projectTitles.get(projectId) ?? null : null,
+      degree: degrees[index]
+    };
+  });
+  return { nodes, edges };
+}
 function readDocument(req) {
   const candidate = req.bodyJson ?? req.body;
   if (candidate && typeof candidate === "object") {

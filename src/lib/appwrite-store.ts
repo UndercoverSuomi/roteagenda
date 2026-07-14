@@ -15,6 +15,7 @@ import { isLocale, type Locale } from "@/lib/i18n";
 import type {
   AiSuggestion,
   AppData,
+  DeepGraphInsights,
   Note,
   Project,
   Task,
@@ -59,13 +60,15 @@ export async function loadAppDataForUser(
   fallbackLocale: Locale = "de",
 ): Promise<AppData> {
   try {
-    const [settings, projects, tasks, notes, suggestions] = await Promise.all([
-      readSettings(fallbackLocale),
-      listAllDocuments<Project>("projects"),
-      listAllDocuments<Task>("tasks"),
-      listAllDocuments<Note>("notes"),
-      listAllDocuments<AiSuggestion>("suggestions"),
-    ]);
+    const [settings, projects, tasks, notes, suggestions, deepInsights] =
+      await Promise.all([
+        readSettings(fallbackLocale),
+        listAllDocuments<Project>("projects"),
+        listAllDocuments<Task>("tasks"),
+        listAllDocuments<Note>("notes"),
+        listAllDocuments<AiSuggestion>("suggestions"),
+        listAllDocuments<DeepGraphInsights>("deepInsights"),
+      ]);
 
     return {
       user: toAppUser(user),
@@ -74,6 +77,7 @@ export async function loadAppDataForUser(
       tasks,
       notes,
       suggestions,
+      deepInsights,
     };
   } catch (error) {
     throw new Error(describeLoadError(error));
@@ -112,7 +116,13 @@ export async function deleteItem(key: CollectionKey, id: string) {
 }
 
 export async function deleteAllUserData() {
-  const keys: CollectionKey[] = ["tasks", "suggestions", "notes", "projects"];
+  const keys: CollectionKey[] = [
+    "tasks",
+    "suggestions",
+    "notes",
+    "projects",
+    "deepInsights",
+  ];
 
   for (const key of keys) {
     const items = await listAllDocuments<StoredItem>(key);

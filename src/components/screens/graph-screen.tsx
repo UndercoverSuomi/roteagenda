@@ -1,6 +1,15 @@
 "use client";
 
-import { ArrowLeft, Loader2, Maximize2, Search, Settings2, Sparkles, X } from "lucide-react";
+import {
+  ArrowLeft,
+  Loader2,
+  Maximize2,
+  Search,
+  Settings2,
+  Sparkles,
+  Telescope,
+  X,
+} from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { cx } from "@/components/app-helpers";
 import { EmptyState, ScreenHeader } from "@/components/ui/primitives";
@@ -15,7 +24,7 @@ import {
 } from "@/lib/graph";
 import type { MessageKey, Translator } from "@/lib/i18n";
 import { withAlpha } from "@/lib/project-colors";
-import type { Note, Project } from "@/lib/types";
+import type { DeepGraphInsights, Note, Project } from "@/lib/types";
 
 const PREFS_KEY = "rote-agenda-graph";
 const MIN_ZOOM = 0.15;
@@ -108,28 +117,72 @@ export function GraphScreen({
   insights,
   insightsError,
   isAnalyzing,
+  deepInsights,
   t,
   onBack,
   onOpenNote,
   onAnalyze,
   onDismissInsights,
+  onRequestDeepAnalysis,
 }: {
   notes: Note[];
   projects: Project[];
   insights: GraphInsights | null;
   insightsError: string | null;
   isAnalyzing: boolean;
+  deepInsights: DeepGraphInsights | null;
   t: Translator;
   onBack: () => void;
   onOpenNote: (noteId: string) => void;
   onAnalyze: (payload: GraphAnalysisPayload) => void;
   onDismissInsights: () => void;
+  onRequestDeepAnalysis: () => Promise<void>;
 }) {
   const [prefs, setPrefs] = useState<GraphPrefs>(() => readPrefs());
   const [query, setQuery] = useState("");
   const [projectFilter, setProjectFilter] = useState<string[]>([]);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [selection, setSelection] = useState<Selection | null>(null);
+  // Tiefenanalyse: angestoßen wird sie asynchron im Worker; running/ready
+  // kommen als Realtime-Updates über das deepInsights-Dokument herein.
+  const [isDeepStarting, setIsDeepStarting] = useState(false);
+  const [deepStartError, setDeepStartError] = useState<string | null>(null);
+  const [showDeep, setShowDeep] = useState(false);
+  const [awaitingDeep, setAwaitingDeep] = useState(false);
+  const deepStatus = deepInsights?.status ?? null;
+  const isDeepRunning = isDeepStarting || deepStatus === "running";
+
+  // Status-Wechsel während des Renders verarbeiten (React-Muster
+  // "adjust state when props change" — setState im Effect ist tabu):
+  // Fertigmeldung klappt das Ergebnis auf, aber nur wenn die Analyse in
+  // dieser Sitzung angefordert wurde.
+  const [prevDeepStatus, setPrevDeepStatus] = useState(deepStatus);
+  if (deepStatus !== prevDeepStatus) {
+    setPrevDeepStatus(deepStatus);
+    if (deepStatus === "running") setIsDeepStarting(false);
+    if (awaitingDeep && (deepStatus === "ready" || deepStatus === "error")) {
+      if (deepStatus === "ready") setShowDeep(true);
+      setAwaitingDeep(false);
+      setIsDeepStarting(false);
+    }
+  }
+
+  async function startDeepAnalysis() {
+    setDeepStartError(null);
+    setIsDeepStarting(true);
+    setAwaitingDeep(true);
+    try {
+      await onRequestDeepAnalysis();
+    } catch (requestError) {
+      setAwaitingDeep(false);
+      setIsDeepStarting(false);
+      setDeepStartError(
+        requestError instanceof Error && requestError.message
+          ? requestError.message
+          : t("graph.deep.startFailed"),
+      );
+    }
+  }
 
   const graph = useMemo(
     () =>
@@ -733,18 +786,33 @@ export function GraphScreen({
         : "border-[var(--line-strong)] text-[var(--ink-soft)]",
     );
 
-  const insightSections: Array<{ key: string; title: string; items: string[] }> = insights
-    ? [
-        { key: "clusters", title: t("graph.insights.clusters"), items: insights.clusters },
-        { key: "anomalies", title: t("graph.insights.anomalies"), items: insights.anomalies },
-        { key: "gaps", title: t("graph.insights.gaps"), items: insights.gaps },
-        {
-          key: "suggestions",
-          title: t("graph.insights.suggestions"),
-          items: insights.suggestions,
-        },
-      ].filter((section) => section.items.length)
-    : [];
+  // Das Panel zeigt entweder die flüchtige Kompakt-Analyse oder die
+  // gespeicherte Tiefenanalyse — beide teilen sich die Struktur.
+  const deepReady = deepInsights?.status === "ready" && Boolean(deepInsights.summary);
+  const activeInsights: GraphInsights | null =
+    showDeep && deepReady && deepInsights ? deepInsights : insights;
+
+  const insightSections: Array<{ key: string; title: string; items: string[] }> =
+    activeInsights
+      ? [
+          {
+            key: "clusters",
+            title: t("graph.insights.clusters"),
+            items: activeInsights.clusters,
+          },
+          {
+            key: "anomalies",
+            title: t("graph.insights.anomalies"),
+            items: activeInsights.anomalies,
+          },
+          { key: "gaps", title: t("graph.insights.gaps"), items: activeInsights.gaps },
+          {
+            key: "suggestions",
+            title: t("graph.insights.suggestions"),
+            items: activeInsights.suggestions,
+          },
+        ].filter((section) => section.items.length)
+      : [];
 
   return (
     <div className="flex flex-1 flex-col px-6 pb-6 pt-3 md:px-8 md:pt-8 lg:px-10">
@@ -869,6 +937,22 @@ export function GraphScreen({
                 {isAnalyzing ? t("graph.analyzing") : t("graph.analyze")}
               </span>
             </button>
+            <button
+              type="button"
+              onClick={() => void startDeepAnalysis()}
+              disabled={isDeepRunning || noteCount < 3}
+              title={noteCount < 3 ? t("graph.insights.tooFew") : t("graph.deep.hint")}
+              className="flex h-9 shrink-0 items-center gap-2 rounded-[5px] border border-[var(--line-strong)] px-3 text-[12px] font-bold disabled:opacity-50"
+            >
+              {isDeepRunning ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Telescope className="h-4 w-4" />
+              )}
+              <span className="hidden sm:inline">
+                {isDeepRunning ? t("graph.deep.running.short") : t("graph.deep.button")}
+              </span>
+            </button>
           </div>
 
           <div className="mt-2 flex flex-wrap items-center gap-2">
@@ -915,6 +999,35 @@ export function GraphScreen({
             <p className="mt-2 rounded-[5px] border border-[var(--red)] bg-[var(--surface-strong)] p-2.5 text-[12px] leading-5 text-[var(--red)]">
               {insightsError}
             </p>
+          ) : null}
+          {deepStartError ? (
+            <p className="mt-2 rounded-[5px] border border-[var(--red)] bg-[var(--surface-strong)] p-2.5 text-[12px] leading-5 text-[var(--red)]">
+              {deepStartError}
+            </p>
+          ) : null}
+          {deepStatus === "error" && deepInsights?.error ? (
+            <p className="mt-2 rounded-[5px] border border-[var(--red)] bg-[var(--surface-strong)] p-2.5 text-[12px] leading-5 text-[var(--red)]">
+              {t("graph.deep.failed", { detail: deepInsights.error })}
+            </p>
+          ) : null}
+          {isDeepRunning ? (
+            <p className="mt-2 flex items-center gap-2 rounded-[5px] border border-[var(--line)] bg-[var(--surface-strong)] p-2.5 text-[12px] leading-5 text-[var(--ink-soft)]">
+              <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
+              {t("graph.deep.running")}
+            </p>
+          ) : null}
+          {deepReady && !showDeep && !isDeepRunning ? (
+            <button
+              type="button"
+              onClick={() => setShowDeep(true)}
+              className="mt-2 flex items-center gap-2 rounded-[5px] border border-[var(--line)] bg-[var(--surface-strong)] p-2.5 text-left text-[12px] font-bold leading-5 text-[var(--ink-soft)]"
+            >
+              <Telescope className="h-3.5 w-3.5 shrink-0 text-[var(--red)]" />
+              {t("graph.deep.view", {
+                date: (deepInsights?.updatedAt ?? "").slice(0, 16).replace("T", ", "),
+                count: deepInsights?.noteCount ?? 0,
+              })}
+            </button>
           ) : null}
 
           <div
@@ -1006,24 +1119,51 @@ export function GraphScreen({
               </div>
             ) : null}
 
-            {insights ? (
-              <div className="absolute inset-y-3 right-3 z-20 w-[min(320px,calc(100%-24px))] overflow-y-auto rounded-[8px] border border-[var(--line)] bg-[var(--paper-soft)] p-4 shadow-xl">
+            {activeInsights ? (
+              <div
+                className={cx(
+                  "absolute inset-y-3 right-3 z-20 overflow-y-auto rounded-[8px] border border-[var(--line)] bg-[var(--paper-soft)] p-4 shadow-xl",
+                  showDeep && deepReady
+                    ? "w-[min(400px,calc(100%-24px))]"
+                    : "w-[min(320px,calc(100%-24px))]",
+                )}
+              >
                 <div className="flex items-start justify-between gap-2">
                   <p className="flex items-center gap-2 text-[13px] font-bold">
-                    <Sparkles className="h-4 w-4 text-[var(--red)]" />
-                    {t("graph.insights.title")}
+                    {showDeep && deepReady ? (
+                      <Telescope className="h-4 w-4 text-[var(--red)]" />
+                    ) : (
+                      <Sparkles className="h-4 w-4 text-[var(--red)]" />
+                    )}
+                    {showDeep && deepReady
+                      ? t("graph.deep.title")
+                      : t("graph.insights.title")}
                   </p>
                   <button
                     type="button"
-                    onClick={onDismissInsights}
+                    onClick={() => {
+                      if (showDeep) {
+                        setShowDeep(false);
+                      } else {
+                        onDismissInsights();
+                      }
+                    }}
                     aria-label={t("common.close")}
                     className="grid h-7 w-7 shrink-0 place-items-center text-[var(--muted)]"
                   >
                     <X className="h-4 w-4" />
                   </button>
                 </div>
-                <p className="mt-2 text-[12px] leading-5 text-[var(--ink-soft)]">
-                  {insights.summary}
+                {showDeep && deepReady && deepInsights ? (
+                  <p className="mt-1 text-[11px] text-[var(--muted)]">
+                    {t("graph.deep.meta", {
+                      date: deepInsights.updatedAt.slice(0, 16).replace("T", ", "),
+                      count: deepInsights.noteCount,
+                    })}
+                  </p>
+                ) : null}
+                <p className="mt-2 whitespace-pre-line text-[12px] leading-5 text-[var(--ink-soft)]">
+                  {activeInsights.summary}
                 </p>
                 {insightSections.map((section) => (
                   <div key={section.key} className="mt-3">

@@ -87,6 +87,25 @@ export interface AiSuggestion {
   createdAt: string;
 }
 
+export type DeepInsightsStatus = "running" | "ready" | "error";
+
+// Ausführliche Wissensnetz-Analyse des Notiz-Workers: läuft asynchron
+// (300-s-Budget statt 25-s-Site-Limit) und lebt als genau ein Dokument
+// pro Nutzer, das der Worker per Realtime aktualisiert.
+export interface DeepGraphInsights {
+  id: string;
+  status: DeepInsightsStatus;
+  summary: string;
+  clusters: string[];
+  anomalies: string[];
+  gaps: string[];
+  suggestions: string[];
+  error: string | null;
+  noteCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface UserSettings {
   aiModel: AiModelId;
   locale: Locale;
@@ -99,4 +118,7 @@ export interface AppData {
   tasks: Task[];
   notes: Note[];
   suggestions: AiSuggestion[];
+  // 0 oder 1 Element — als Liste modelliert, damit Laden, Realtime und
+  // Offline-Cache demselben Collection-Muster folgen wie alles andere.
+  deepInsights: DeepGraphInsights[];
 }

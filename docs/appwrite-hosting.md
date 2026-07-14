@@ -21,7 +21,7 @@ APPWRITE_API_KEY=<api-key> node scripts/setup-appwrite.mjs
 Das Script ist idempotent und erstellt:
 
 - Datenbank `roteagenda`
-- Collections `projects`, `tasks`, `rawNotes`, `suggestions` mit Document Security und `create("users")`-Berechtigung
+- Collections `projects`, `tasks`, `rawNotes`, `graphInsights`, `suggestions` mit Document Security und `create("users")`-Berechtigung
 - alle Attribute laut Schema (siehe unten)
 - `.env.local` mit den passenden `NEXT_PUBLIC_APPWRITE_*`-Werten
 
@@ -36,6 +36,8 @@ Nur relevant, falls Collections manuell angelegt werden. Textfelder, die leer se
 **tasks:** `id` (string, required), `title` (string, required), `description` (string), `projectId` (string, required), `status` (string, required), `priority` (string, required), `dueDate` (string), `sourceNoteId` (string), `createdBy` (string, required), `googleSynced` (string), `createdAt`/`updatedAt` (string, required)
 
 **rawNotes** (app-seitig "Notizen"): `id` (string, required), `content` (string, required), `processed` (boolean, required), `title` (string), `enhanced` (string, Groesse 20000 → wird als TEXT gespeichert), `tags` (string array), `projectId` (string), `relatedNoteIds` (string array), `source` (string), `sourceUrl` (string), `pinned` (boolean), `pendingFileId` (string), `processingError` (string), `mediaFileId` (string), `createdAt` (string, required), `updatedAt` (string)
+
+**graphInsights** (Tiefenanalyse des Wissensnetzes, 1 Dokument pro Nutzer): `id` (string, required), `status` (string), `summary` (string, Groesse 20000 → wird als TEXT gespeichert), `clusters`/`anomalies`/`gaps`/`suggestions` (string arrays), `error` (string), `noteCount` (integer), `createdAt` (string, required), `updatedAt` (string)
 
 **suggestions:** `id` (string, required), `rawNoteId` (string, required), `kind` (string), `suggestedTitle` (string, required), `suggestedDescription` (string), `suggestedProjectId` (string), `suggestedNewProjectTitle` (string), `confidence` (float, required), `priority` (string, required), `dueDate` (string), `eventStart` (string), `eventEnd` (string), `reasoning` (string), `needsReview` (boolean, required), `state` (string, required), `createdAt` (string, required)
 

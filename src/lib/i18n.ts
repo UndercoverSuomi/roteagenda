@@ -305,6 +305,33 @@ const messages = {
   "graph.settings.halo": { de: "Farbhöfe", en: "Color halos" },
   "graph.analyze": { de: "KI-Analyse", en: "AI insights" },
   "graph.analyzing": { de: "Analysiere…", en: "Analyzing…" },
+  "graph.deep.button": { de: "Tiefenanalyse", en: "Deep analysis" },
+  "graph.deep.running.short": { de: "Läuft…", en: "Running…" },
+  "graph.deep.hint": {
+    de: "Ausführliche Analyse im Hintergrund — ohne Zeitlimit, mit längeren Ergebnissen.",
+    en: "Thorough background analysis — no time limit, with longer results.",
+  },
+  "graph.deep.running": {
+    de: "Die Tiefenanalyse läuft im Hintergrund. Das Ergebnis erscheint hier automatisch — du kannst währenddessen weiterarbeiten.",
+    en: "The deep analysis is running in the background. The result will appear here automatically — you can keep working meanwhile.",
+  },
+  "graph.deep.title": { de: "Tiefenanalyse", en: "Deep analysis" },
+  "graph.deep.meta": {
+    de: "Stand {date} · basiert auf {count} Notizen",
+    en: "As of {date} · based on {count} notes",
+  },
+  "graph.deep.view": {
+    de: "Tiefenanalyse ansehen (Stand {date}, {count} Notizen)",
+    en: "View deep analysis (as of {date}, {count} notes)",
+  },
+  "graph.deep.failed": {
+    de: "Tiefenanalyse fehlgeschlagen: {detail}",
+    en: "Deep analysis failed: {detail}",
+  },
+  "graph.deep.startFailed": {
+    de: "Die Tiefenanalyse konnte nicht gestartet werden. Bitte versuche es erneut.",
+    en: "The deep analysis could not be started. Please try again.",
+  },
   "graph.insights.title": { de: "KI-Blick aufs Netz", en: "AI view of your graph" },
   "graph.insights.clusters": { de: "Themen-Cluster", en: "Clusters" },
   "graph.insights.anomalies": { de: "Auffälligkeiten", en: "Notable patterns" },

@@ -111,6 +111,23 @@ test("legacy capture-era notes get all newer fields as defaults", () => {
   assert.equal(note.updatedAt, "2026-05-01T08:00:00.000Z");
 });
 
+test("deep insight documents get defaults for all newer fields", () => {
+  const insights = documentToItem("deepInsights", {
+    id: "insights-1",
+    createdAt: "2026-07-14T10:00:00.000Z",
+  });
+
+  assert.equal(insights.status, "ready");
+  assert.equal(insights.summary, "");
+  assert.deepEqual(insights.clusters, []);
+  assert.deepEqual(insights.anomalies, []);
+  assert.deepEqual(insights.gaps, []);
+  assert.deepEqual(insights.suggestions, []);
+  assert.equal(insights.error, null);
+  assert.equal(insights.noteCount, 0);
+  assert.equal(insights.updatedAt, "2026-07-14T10:00:00.000Z");
+});
+
 test("toAppwriteData drops null fields but keeps empty strings and false", () => {
   const data = toAppwriteData({
     id: "note-1",

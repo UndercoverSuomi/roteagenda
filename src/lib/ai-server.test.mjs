@@ -796,6 +796,32 @@ test("provider calls carry an abort signal and map timeouts to a clear error", a
   assert.ok(sawSignal, "fetch bekommt ein AbortSignal");
 });
 
+test("deep graph insights request a thorough answer with a bigger budget", async () => {
+  const bodies = [];
+  const longList = Array.from({ length: 20 }, (_, i) => `Cluster ${i + 1}`);
+  const insights = await generateGraphInsights({
+    config: GLM_TEST_CONFIG,
+    nodes: INSIGHT_NODES,
+    edges: [[0, 1]],
+    locale: "de",
+    detail: true,
+    fetchFn: async (url, init) => {
+      bodies.push(JSON.parse(init.body));
+      return chatReply(
+        JSON.stringify({ summary: "Ausführliche Analyse.", clusters: longList }),
+      );
+    },
+  });
+
+  const prompt = bodies[0].messages.at(-1).content;
+  assert.match(prompt, /TIEFENANALYSE/);
+  assert.match(prompt, /maximal 12 Einträge/);
+  assert.equal(bodies[0].max_tokens, 6000);
+  // Die Tiefenanalyse darf längere Listen behalten (12 statt 6) —
+  // kappt aber weiterhin gegen Ausreißer.
+  assert.equal(insights.clusters.length, 12);
+});
+
 test("graph insights disable reasoning and sort providers only for openrouter", async () => {
   const bodies = [];
   const reply = () => chatReply(JSON.stringify({ summary: "Ok." }));
