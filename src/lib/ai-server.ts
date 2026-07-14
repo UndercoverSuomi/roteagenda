@@ -108,15 +108,19 @@ const PROVIDER_DEFINITIONS: Record<AiModelId, AiProviderDefinition> = {
     openRouterModelEnv: "OPENROUTER_GLM_5_2_MODEL",
     defaultOpenRouterModel: "z-ai/glm-5.2",
   },
+  // ID bleibt "kimi-k2-7" (steckt in gespeicherten Nutzer-Prefs); das
+  // Modell dahinter ist K2.6 — den K2.7-Slug führt OpenRouter nur noch
+  // als Code-Variante (moonshotai/kimi-k2.7-code), general-purpose gibt
+  // es dort ausschließlich bis K2.6 (Katalog-Stand 2026-07).
   "kimi-k2-7": {
     provider: "chat-completions",
     keyEnv: "MOONSHOT_API_KEY",
     modelEnv: "MOONSHOT_KIMI_K2_7_MODEL",
-    defaultModel: "kimi-k2.7",
+    defaultModel: "kimi-k2.6",
     baseUrlEnv: "MOONSHOT_BASE_URL",
     defaultBaseUrl: "https://api.moonshot.ai/v1",
     openRouterModelEnv: "OPENROUTER_KIMI_K2_7_MODEL",
-    defaultOpenRouterModel: "moonshotai/kimi-k2.7",
+    defaultOpenRouterModel: "moonshotai/kimi-k2.6",
   },
   "qwen-3-7-plus": {
     provider: "chat-completions",
@@ -372,8 +376,14 @@ async function requestProvider(
         messages: chatMessages,
         max_tokens: options.maxTokens,
         ...(options.json ? { response_format: { type: "json_object" } } : {}),
-        ...(options.noReasoning && config.baseUrl.includes("openrouter")
-          ? { reasoning: { enabled: false } }
+        ...(config.baseUrl.includes("openrouter")
+          ? {
+              // Ohne Sortierung würfelt das Load-Balancing auch degradierte
+              // Provider (gemessen 2026-07: DeepSeek hing ohne bis ins
+              // 25-s-Timeout, mit Sortierung 3,5 s).
+              provider: { sort: "throughput" },
+              ...(options.noReasoning ? { reasoning: { enabled: false } } : {}),
+            }
           : {}),
       }),
     },
@@ -1432,7 +1442,10 @@ export async function generateGraphInsights({
       const response = await requestProvider(
         config,
         { system, user: prompt },
-        { maxTokens: 1000, json: true, timeoutMs, noReasoning: true },
+        // 1000 Tokens reichten bei großen Netzen nicht: Antworten endeten
+        // mit finish_reason "length" mitten im JSON → Parse-Fehler → Retry
+        // → Timeout-Kette.
+        { maxTokens: 2500, json: true, timeoutMs, noReasoning: true },
         fetchFn,
       );
       const payload = await readJsonResponse(response, config.label);

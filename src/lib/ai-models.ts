@@ -1,7 +1,9 @@
 export const AI_MODEL_OPTIONS = [
   { id: "openai-gpt-5-5", label: "OpenAI GPT-5.5" },
   { id: "glm-5-2", label: "GLM 5.2" },
-  { id: "kimi-k2-7", label: "Kimi K2.7" },
+  // ID historisch "kimi-k2-7" (gespeicherte Nutzer-Prefs); real ist K2.6
+  // hinterlegt, seit OpenRouter K2.7 nur noch als Code-Variante führt.
+  { id: "kimi-k2-7", label: "Kimi K2.6" },
   { id: "qwen-3-7-plus", label: "Qwen 3.7 Plus" },
   { id: "qwen-3-7-max", label: "Qwen 3.7 Max" },
   { id: "minimax-m3", label: "MiniMax M3" },

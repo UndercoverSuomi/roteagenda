@@ -27,21 +27,49 @@ type ErrorResponse = {
   error?: string;
 };
 
+// Ein JWT pro Sitzung wiederverwenden statt eines pro Aufruf:
+// createJWT ist ein eigener Appwrite-Roundtrip (rate-limitiert) und
+// machte jeden KI-Aufruf langsamer und fehleranfälliger als nötig.
+const JWT_DURATION_SECONDS = 900;
+let cachedJwt: { value: string; expiresAt: number } | null = null;
+
+async function getJwt(forceFresh = false): Promise<string> {
+  const now = Date.now();
+  if (!forceFresh && cachedJwt && cachedJwt.expiresAt > now) {
+    return cachedJwt.value;
+  }
+
+  const created = await account.createJWT({ duration: JWT_DURATION_SECONDS });
+  // 60 s Puffer, damit ein Request nicht mit einem auslaufenden Token startet.
+  cachedJwt = {
+    value: created.jwt,
+    expiresAt: now + (JWT_DURATION_SECONDS - 60) * 1000,
+  };
+  return created.jwt;
+}
+
 async function authorizedJsonPost<T>(
   path: string,
   body: Record<string, unknown>,
   fallbackError: (status: number) => string,
 ): Promise<T & ErrorResponse> {
-  const jwt = await account.createJWT({ duration: 900 });
-  const response = await fetch(path, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${jwt.jwt}`,
-      "Content-Type": "application/json",
-      Accept: "application/json",
-    },
-    body: JSON.stringify(body),
-  });
+  const post = (jwt: string) =>
+    fetch(path, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${jwt}`,
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+
+  let response = await post(await getJwt());
+  if (response.status === 401) {
+    // Gecachtes JWT kann nach Logout/Login oder Session-Ende tot sein —
+    // einmal mit frischem Token wiederholen, erst dann aufgeben.
+    response = await post(await getJwt(true));
+  }
 
   const payload = (await response.json().catch(() => null)) as (T & ErrorResponse) | null;
 

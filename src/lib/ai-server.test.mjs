@@ -105,6 +105,17 @@ test("openrouter model slug can be overridden per model", () => {
   assert.equal(result.config.model, "moonshotai/kimi-k2.7-code");
 });
 
+test("kimi resolves to the k2.6 slug openrouter actually serves", () => {
+  // moonshotai/kimi-k2.7 existiert im Katalog nicht mehr (nur -code);
+  // mit dem toten Slug schlugen alle Kimi-Aufrufe sofort mit 400 fehl.
+  const result = resolveAiModelConfig("kimi-k2-7", {
+    OPENROUTER_API_KEY: "sk-or-test",
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.config.model, "moonshotai/kimi-k2.6");
+});
+
 test("provider JSON parsing rejects malformed responses", () => {
   assert.throws(
     () => parseProviderJson("not json"),
@@ -718,7 +729,7 @@ test("provider calls carry an abort signal and map timeouts to a clear error", a
   assert.ok(sawSignal, "fetch bekommt ein AbortSignal");
 });
 
-test("graph insights disable reasoning only for openrouter", async () => {
+test("graph insights disable reasoning and sort providers only for openrouter", async () => {
   const bodies = [];
   const reply = () => chatReply(JSON.stringify({ summary: "Ok." }));
   const run = (baseUrl) =>
@@ -736,7 +747,14 @@ test("graph insights disable reasoning only for openrouter", async () => {
   await run("https://example.test/v1");
 
   assert.deepEqual(bodies[0].reasoning, { enabled: false });
+  // Sortierung nach Durchsatz statt Load-Balancing-Roulette über
+  // teils degradierte Provider.
+  assert.deepEqual(bodies[0].provider, { sort: "throughput" });
+  // Genug Antwort-Budget: 1000 Tokens endeten bei großen Netzen mit
+  // finish_reason "length" mitten im JSON.
+  assert.ok(bodies[0].max_tokens >= 2500);
   assert.equal(bodies[1].reasoning, undefined);
+  assert.equal(bodies[1].provider, undefined);
 });
 
 test("enhancement prompt demands at least three tags", async () => {
