@@ -137,12 +137,8 @@ export function CaptureScreen({
     }
   }
 
-  async function handlePhotoSelected(event: React.ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0];
-    // Dieselbe Datei soll erneut wählbar sein.
-    event.target.value = "";
-    if (!file) return;
-
+  async function processPhotoFile(file: File) {
+    if (photoState === "processing") return;
     setMediaError(null);
     setPhotoState("processing");
 
@@ -159,6 +155,26 @@ export function CaptureScreen({
           : t("capture.photo.error"),
       );
     }
+  }
+
+  function handlePhotoSelected(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    // Dieselbe Datei soll erneut wählbar sein.
+    event.target.value = "";
+    if (!file) return;
+    void processPhotoFile(file);
+  }
+
+  // Kopierte Screenshots/Grafiken direkt ins Textfeld einfügen (Strg+V) —
+  // gleicher Erkennungs-Flow wie der Foto-Button, ohne Umweg über Dateien.
+  function handlePaste(event: React.ClipboardEvent) {
+    const imageItem = [...event.clipboardData.items].find(
+      (item) => item.kind === "file" && item.type.startsWith("image/"),
+    );
+    const file = imageItem?.getAsFile();
+    if (!file) return;
+    event.preventDefault();
+    void processPhotoFile(file);
   }
 
   function formatSeconds(totalSeconds: number) {
@@ -192,6 +208,7 @@ export function CaptureScreen({
         <textarea
           value={captureText}
           onChange={(event) => onChangeText(event.target.value)}
+          onPaste={handlePaste}
           maxLength={MAX_NOTE_LENGTH}
           placeholder={t("capture.placeholder")}
           className="min-h-44 w-full resize-none bg-transparent text-[16px] leading-7 outline-none placeholder:text-[var(--muted)]"

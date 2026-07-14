@@ -96,6 +96,17 @@ export function NotesScreen({
             <input
               value={importUrl}
               onChange={(event) => onImportUrlChange(event.target.value)}
+              onPaste={(event) => {
+                // Kopierte Screenshots/Grafiken direkt einfügen (Strg+V) —
+                // gleicher Flow wie der Kamera-Button.
+                const imageItem = [...event.clipboardData.items].find(
+                  (item) => item.kind === "file" && item.type.startsWith("image/"),
+                );
+                const file = imageItem?.getAsFile();
+                if (!file) return;
+                event.preventDefault();
+                onImportImage(file);
+              }}
               placeholder={t("notes.importPlaceholder")}
               disabled={isImporting}
               className="h-10 w-full bg-transparent text-[13px] outline-none placeholder:text-[var(--muted)]"

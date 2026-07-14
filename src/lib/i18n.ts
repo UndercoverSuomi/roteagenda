@@ -204,8 +204,8 @@ const messages = {
   },
   "notes.create": { de: "Notiz anlegen", en: "Create note" },
   "notes.importPlaceholder": {
-    de: "Link einfügen (Artikel oder YouTube)…",
-    en: "Paste a link (article or YouTube)…",
+    de: "Link oder Bild einfügen (Artikel, YouTube, Screenshot)…",
+    en: "Paste a link or image (article, YouTube, screenshot)…",
   },
   "notes.importGo": { de: "Zusammenfassen", en: "Summarize" },
   "notes.importImage": {
