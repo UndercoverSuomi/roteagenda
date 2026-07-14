@@ -238,6 +238,39 @@ test("project suggestions are normalized without schedule fields", () => {
   assert.equal(project.state, "pending");
 });
 
+test("related project ids survive only when they exist", () => {
+  const result = buildNoteEnhancementFromProviderText({
+    providerText: enhancementPayload({
+      projectId: null,
+      suggestions: [
+        {
+          kind: "project",
+          suggestedTitle: "Coding - Politikwebsite",
+          suggestedDescription: "Neue Website für das Politikprojekt.",
+          suggestedProjectId: null,
+          suggestedNewProjectTitle: null,
+          relatedProjectIds: ["project-coding", "project-halluziniert"],
+          confidence: 0.85,
+          priority: "medium",
+          dueDate: null,
+          eventStart: null,
+          eventEnd: null,
+          reasoning: "Gehört zur Coding-Themenfamilie.",
+          needsReview: false,
+        },
+      ],
+    }),
+    noteId: "note-self",
+    projectIds: ["project-coding"],
+    otherNoteIds: [],
+    nowIso: "2026-07-07T12:00:00.000Z",
+    idFactory: (prefix) => `${prefix}-fixed`,
+  });
+
+  // Verwandtschaft steuert die Farbfamilie — halluzinierte IDs fliegen raus.
+  assert.deepEqual(result.suggestions[0].relatedProjectIds, ["project-coding"]);
+});
+
 test("the enhancement prompt introduces project suggestions in both locales", async () => {
   for (const [locale, marker] of [
     ["de", /kind "project": Passt KEIN aktiviertes Projekt/],
@@ -815,6 +848,7 @@ test("categorization keeps only known ids and uses each note once", () => {
           reason: "Drei Notizen kreisen um dieselbe Reise.",
           // note-1 ist schon zugeordnet, note-fake existiert nicht.
           noteIds: ["note-1", "note-2", "note-3", "note-fake"],
+          relatedProjectIds: ["project-1", "project-erfunden"],
         },
         { title: "", description: "ohne Titel", reason: "", noteIds: ["note-4"] },
         { title: "Leeres Projekt", description: "", reason: "", noteIds: ["note-fake"] },
@@ -828,6 +862,7 @@ test("categorization keeps only known ids and uses each note once", () => {
   assert.equal(result.newProjects.length, 1);
   assert.equal(result.newProjects[0].title, "Japan-Reise");
   assert.deepEqual(result.newProjects[0].noteIds, ["note-2", "note-3"]);
+  assert.deepEqual(result.newProjects[0].relatedProjectIds, ["project-1"]);
 });
 
 test("categorization prompt sends notes, projects and the json contract", async () => {

@@ -99,7 +99,8 @@ export function ProjectEditor({
             />
           </Field>
           <Field label={t("projectEditor.color")}>
-            <div className="flex flex-wrap gap-2 pt-1">
+            {/* 3er-Spalten = Farbfamilien; benachbarte Familien ähneln sich. */}
+            <div className="grid grid-cols-9 gap-2 pt-1">
               {PROJECT_COLORS.map((color) => (
                 <button
                   key={color}
@@ -108,7 +109,7 @@ export function ProjectEditor({
                   aria-label={color}
                   aria-pressed={draft.color === color}
                   className={cx(
-                    "h-8 w-8 rounded-full border border-black/10 transition",
+                    "h-7 w-7 rounded-full border border-black/10 transition",
                     draft.color === color &&
                       "ring-2 ring-[var(--ink)] ring-offset-2 ring-offset-[var(--paper-soft)]",
                   )}

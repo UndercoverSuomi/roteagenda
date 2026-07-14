@@ -449,7 +449,13 @@ async function runNoteCategorization(
     const assignments: Array<{ noteId: string; projectId: string }> = [];
     const mergedProjects = new Map<
       string,
-      { title: string; description: string; reason: string; noteIds: string[] }
+      {
+        title: string;
+        description: string;
+        reason: string;
+        noteIds: string[];
+        relatedProjectIds: string[];
+      }
     >();
 
     for (let offset = 0; offset < candidates.length; offset += CATEGORIZE_CHUNK_SIZE) {
@@ -473,8 +479,13 @@ async function runNoteCategorization(
         const existing = mergedProjects.get(key);
         if (existing) {
           existing.noteIds.push(...project.noteIds);
+          existing.relatedProjectIds.push(...project.relatedProjectIds);
         } else {
-          mergedProjects.set(key, { ...project, noteIds: [...project.noteIds] });
+          mergedProjects.set(key, {
+            ...project,
+            noteIds: [...project.noteIds],
+            relatedProjectIds: [...project.relatedProjectIds],
+          });
         }
       }
     }
@@ -516,6 +527,7 @@ async function runNoteCategorization(
             suggestedDescription: project.description.slice(0, 4000),
             suggestedNewProjectTitle: project.title.slice(0, 120),
             suggestedNoteIds: project.noteIds.slice(0, 100),
+            relatedProjectIds: Array.from(new Set(project.relatedProjectIds)).slice(0, 12),
             confidence: 0.8,
             priority: "medium",
             reasoning: (project.reason || project.description).slice(0, 4000),

@@ -135,6 +135,7 @@ const COLLECTIONS = [
       string("suggestedProjectId", 64, false),
       string("suggestedNewProjectTitle", 128, false),
       string("suggestedNoteIds", 64, false, true),
+      string("relatedProjectIds", 64, false, true),
       float("confidence"),
       string("priority", 16),
       string("dueDate", 16, false),

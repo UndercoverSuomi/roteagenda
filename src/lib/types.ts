@@ -79,6 +79,10 @@ export interface AiSuggestion {
   // neuen Projekt verknüpft werden (Batch-Kategorisierung bündelt so
   // mehrere Bestandsnotizen in einem Vorschlag).
   suggestedNoteIds: string[];
+  // Nur bei kind="project": thematisch verwandte vorhandene Projekte —
+  // das neue Projekt bekommt beim Annehmen eine Farbe aus derselben
+  // Farbfamilie (Coding-Projekte z. B. Rot und Terrakotta).
+  relatedProjectIds: string[];
   confidence: number;
   priority: TaskPriority;
   dueDate: string | null;

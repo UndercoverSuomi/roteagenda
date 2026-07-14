@@ -85,7 +85,7 @@ import {
   writeCachedAppData,
   writeQueuedOps,
 } from "@/lib/offline-store";
-import { pickProjectColor } from "@/lib/project-colors";
+import { pickRelatedProjectColor } from "@/lib/project-colors";
 import { applyRealtimeEvent } from "@/lib/realtime";
 import { createSyncQueue, type SyncFailure, type SyncStatus } from "@/lib/sync-queue";
 import {
@@ -949,6 +949,11 @@ export function RoteAgendaApp() {
   // Projekte kategorisieren auch reine Ideen-/Wissens-Notizen.
   function acceptProjectSuggestion(suggestion: AiSuggestion) {
     const now = new Date().toISOString();
+    // Thematisch verwandte Projekte färben das neue in derselben
+    // Farbfamilie (bzw. der Nachbarfamilie, wenn sie voll ist).
+    const relatedColors = data.projects
+      .filter((project) => suggestion.relatedProjectIds.includes(project.id))
+      .map((project) => project.color);
     const project: Project = {
       id: createLocalId("project"),
       title: suggestion.suggestedNewProjectTitle ?? suggestion.suggestedTitle,
@@ -958,7 +963,10 @@ export function RoteAgendaApp() {
         .split(/\s+/)
         .filter((word) => word.length > 4)
         .slice(0, 6),
-      color: pickProjectColor(data.projects.length),
+      color: pickRelatedProjectColor(
+        data.projects.map((project) => project.color),
+        relatedColors,
+      ),
       progress: 0,
       aiEnabled: true,
       createdAt: now,
@@ -1028,7 +1036,7 @@ export function RoteAgendaApp() {
           .split(/\s+/)
           .filter((word) => word.length > 4)
           .slice(0, 6),
-        color: pickProjectColor(data.projects.length),
+        color: pickRelatedProjectColor(data.projects.map((project) => project.color)),
         progress: 0,
         aiEnabled: true,
         createdAt: now,
@@ -1279,7 +1287,7 @@ export function RoteAgendaApp() {
       title: "",
       description: "",
       keywords: [],
-      color: pickProjectColor(data.projects.length),
+      color: pickRelatedProjectColor(data.projects.map((project) => project.color)),
       progress: 0,
       aiEnabled: true,
       createdAt: now,

@@ -496,11 +496,15 @@ export function buildNoteEnhancementFromProviderText({
       idFactory(`suggestion-${index}`),
     );
 
-    // Halluzinierte Projekt-IDs werden zu "neues Projekt"-Vorschlägen.
+    // Halluzinierte Projekt-IDs fliegen raus — als Zuordnung wie als
+    // Verwandtschaft für die Farbwahl.
+    const relatedProjectIds = normalized.relatedProjectIds.filter((projectId) =>
+      knownProjects.has(projectId),
+    );
     if (normalized.suggestedProjectId && !knownProjects.has(normalized.suggestedProjectId)) {
-      return { ...normalized, suggestedProjectId: null };
+      return { ...normalized, suggestedProjectId: null, relatedProjectIds };
     }
-    return normalized;
+    return { ...normalized, relatedProjectIds };
   });
 
   return { enhancement, suggestions };
@@ -596,6 +600,7 @@ function normalizeSuggestion(
       suggestedProjectId: null,
       suggestedNewProjectTitle: suggestedNewProjectTitle ?? suggestedTitle,
       suggestedNoteIds: [],
+      relatedProjectIds: readIdList(value.relatedProjectIds),
       confidence,
       priority,
       dueDate: null,
@@ -620,6 +625,7 @@ function normalizeSuggestion(
     suggestedProjectId: readNullableString(value.suggestedProjectId, "suggestedProjectId"),
     suggestedNewProjectTitle,
     suggestedNoteIds: [],
+    relatedProjectIds: [],
     confidence,
     priority,
     dueDate,
@@ -630,6 +636,13 @@ function normalizeSuggestion(
     state: "pending",
     createdAt,
   };
+}
+
+function readIdList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return Array.from(
+    new Set(value.filter((id): id is string => typeof id === "string" && Boolean(id.trim()))),
+  ).slice(0, 12);
 }
 
 function readEventTime(value: unknown, field: string) {
@@ -708,7 +721,7 @@ function describeToday(todayIso: string | undefined, locale: Locale) {
 }
 
 const JSON_SHAPE =
-  '{"title":"...","enhanced":"...","tags":["tag1","tag2"],"projectId":"project-id | null","relatedNoteIds":["note-id"],"suggestions":[{"kind":"task | event | project","suggestedTitle":"...","suggestedDescription":"...","suggestedProjectId":"project-id | null","suggestedNewProjectTitle":"... | null","confidence":0.0,"priority":"low|medium|high","dueDate":"YYYY-MM-DD | null","eventStart":"YYYY-MM-DDTHH:MM | null","eventEnd":"YYYY-MM-DDTHH:MM | null","reasoning":"...","needsReview":true}]}';
+  '{"title":"...","enhanced":"...","tags":["tag1","tag2"],"projectId":"project-id | null","relatedNoteIds":["note-id"],"suggestions":[{"kind":"task | event | project","suggestedTitle":"...","suggestedDescription":"...","suggestedProjectId":"project-id | null","suggestedNewProjectTitle":"... | null","relatedProjectIds":["project-id"],"confidence":0.0,"priority":"low|medium|high","dueDate":"YYYY-MM-DD | null","eventStart":"YYYY-MM-DDTHH:MM | null","eventEnd":"YYYY-MM-DDTHH:MM | null","reasoning":"...","needsReview":true}]}';
 
 // Obergrenzen, damit der Prompt auch bei großen Datenmengen beherrschbar
 // bleibt. Bewusst großzügig: Tags und Verlinkungen sollen den GESAMTEN
@@ -774,7 +787,7 @@ function buildEnhancePrompt(
       "About suggestions (0 to 4 entries):",
       '- kind "task": a concrete actionable task from the note. kind "event": an appointment with a recognizable date; set eventStart as local time YYYY-MM-DDTHH:MM (assume 09:00 if no time is given) and dueDate to the same date.',
       "- For an event, also propose sensible preparation tasks as separate task suggestions (e.g. bring documents).",
-      '- kind "project": if NO enabled project fits (projectId is null) but the note clearly belongs to a larger topic or undertaking (this applies to pure idea, link, video or photo notes as well), suggest exactly ONE new project: suggestedTitle is a concise project name, suggestedDescription one sentence describing its purpose, dueDate/eventStart/eventEnd null. Never suggest a project similar to an existing one, and skip the suggestion for one-off throwaway notes.',
+      '- kind "project": if NO enabled project fits (projectId is null) but the note clearly belongs to a larger topic or undertaking (this applies to pure idea, link, video or photo notes as well), suggest exactly ONE new project: suggestedTitle is a concise project name, suggestedDescription one sentence describing its purpose, relatedProjectIds lists existing projects of the same topic family (e.g. other coding projects — they will share a color family), otherwise an empty list, dueDate/eventStart/eventEnd null. Never suggest a project similar to an existing one, and skip the suggestion for one-off throwaway notes.',
       "- Convert relative expressions like today, tomorrow or Friday based on today's date.",
       "- Do not suggest tasks that already exist in the list of open tasks.",
       "- If the note contains no task, no event and no project-worthy topic, return an empty suggestions list.",
@@ -807,7 +820,7 @@ function buildEnhancePrompt(
     "Zu den Vorschlägen (suggestions, 0 bis 4 Einträge):",
     '- kind "task": eine konkrete Aufgabe aus der Notiz. kind "event": ein Termin mit erkennbarem Datum; setze eventStart als lokale Zeit YYYY-MM-DDTHH:MM (ohne erkennbare Uhrzeit 09:00 annehmen) und dueDate auf dasselbe Datum.',
     "- Zu einem Termin gehören sinnvolle Vorbereitungs-Aufgaben als eigene task-Vorschläge (z. B. Unterlagen mitnehmen).",
-    '- kind "project": Passt KEIN aktiviertes Projekt (projectId ist null), gehört die Notiz aber klar zu einem größeren Thema oder Vorhaben (auch reine Ideen-, Link-, Video- oder Foto-Notizen), schlage genau EIN neues Projekt vor: suggestedTitle ist ein prägnanter Projektname, suggestedDescription ein Satz zum Zweck, dueDate/eventStart/eventEnd null. Schlage nie ein Projekt vor, das einem vorhandenen ähnelt, und keines für belanglose Wegwerf-Notizen.',
+    '- kind "project": Passt KEIN aktiviertes Projekt (projectId ist null), gehört die Notiz aber klar zu einem größeren Thema oder Vorhaben (auch reine Ideen-, Link-, Video- oder Foto-Notizen), schlage genau EIN neues Projekt vor: suggestedTitle ist ein prägnanter Projektname, suggestedDescription ein Satz zum Zweck, relatedProjectIds nennt vorhandene Projekte derselben Themenfamilie (z. B. weitere Coding-Projekte — sie teilen sich dann eine Farbfamilie), sonst leere Liste, dueDate/eventStart/eventEnd null. Schlage nie ein Projekt vor, das einem vorhandenen ähnelt, und keines für belanglose Wegwerf-Notizen.',
     "- Rechne relative Angaben wie heute, morgen oder Freitag vom heutigen Datum aus um.",
     "- Schlage keine Aufgabe vor, die bereits in der Liste offener Aufgaben existiert.",
     "- Enthält die Notiz weder Aufgabe noch Termin noch ein projektwürdiges Thema, gib eine leere suggestions-Liste zurück.",
@@ -1369,6 +1382,7 @@ export type NoteCategorization = {
     description: string;
     reason: string;
     noteIds: string[];
+    relatedProjectIds: string[];
   }>;
 };
 
@@ -1382,7 +1396,7 @@ type CategorizeParams = {
 };
 
 const CATEGORIZE_JSON_SHAPE =
-  '{"assignments":[{"noteId":"...","projectId":"..."}],"newProjects":[{"title":"...","description":"...","reason":"...","noteIds":["note-id"]}]}';
+  '{"assignments":[{"noteId":"...","projectId":"..."}],"newProjects":[{"title":"...","description":"...","reason":"...","noteIds":["note-id"],"relatedProjectIds":["project-id"]}]}';
 
 function buildCategorizePrompt(
   notes: CategorizeNoteInput[],
@@ -1402,7 +1416,7 @@ function buildCategorizePrompt(
       "You receive the user's UNASSIGNED notes (id, t=title, g=tags, s=snippet) plus the existing projects. Respond exclusively with valid JSON in this shape:",
       CATEGORIZE_JSON_SHAPE,
       "- assignments: every note that genuinely fits an EXISTING project. Only real thematic fits — leave notes out rather than forcing them.",
-      "- newProjects: when several remaining notes clearly belong to one larger topic or undertaking, propose ONE project for them: title is a concise project name, description one sentence of purpose, reason explains briefly why these notes belong together, noteIds lists the matching notes. Only propose a project for at least two related notes or one clearly project-worthy undertaking; never one similar to an existing project; skip throwaway notes.",
+      "- newProjects: when several remaining notes clearly belong to one larger topic or undertaking, propose ONE project for them: title is a concise project name, description one sentence of purpose, reason explains briefly why these notes belong together, noteIds lists the matching notes, relatedProjectIds lists existing projects of the same topic family (they will share a color family), otherwise an empty list. Only propose a project for at least two related notes or one clearly project-worthy undertaking; never one similar to an existing project; skip throwaway notes.",
       "- A note appears at most once across assignments and newProjects. Notes that fit nowhere are simply omitted.",
       "Write every text in English.",
       "Existing projects:",
@@ -1417,7 +1431,7 @@ function buildCategorizePrompt(
     "Du bekommst die UNZUGEORDNETEN Notizen des Nutzers (id, t=Titel, g=Tags, s=Snippet) sowie die vorhandenen Projekte. Antworte ausschließlich mit gültigem JSON in dieser Form:",
     CATEGORIZE_JSON_SHAPE,
     "- assignments: jede Notiz, die wirklich zu einem VORHANDENEN Projekt passt. Nur echte thematische Treffer — lass Notizen lieber weg, statt sie zu erzwingen.",
-    "- newProjects: Gehören mehrere übrige Notizen klar zu einem größeren Thema oder Vorhaben, schlage dafür EIN Projekt vor: title ist ein prägnanter Projektname, description ein Satz zum Zweck, reason begründet kurz, warum diese Notizen zusammengehören, noteIds listet die passenden Notizen. Schlage ein Projekt nur für mindestens zwei zusammengehörige Notizen oder ein klar projektwürdiges Vorhaben vor; nie eines, das einem vorhandenen ähnelt; belanglose Wegwerf-Notizen überspringst du.",
+    "- newProjects: Gehören mehrere übrige Notizen klar zu einem größeren Thema oder Vorhaben, schlage dafür EIN Projekt vor: title ist ein prägnanter Projektname, description ein Satz zum Zweck, reason begründet kurz, warum diese Notizen zusammengehören, noteIds listet die passenden Notizen, relatedProjectIds nennt vorhandene Projekte derselben Themenfamilie (sie teilen sich dann eine Farbfamilie), sonst leere Liste. Schlage ein Projekt nur für mindestens zwei zusammengehörige Notizen oder ein klar projektwürdiges Vorhaben vor; nie eines, das einem vorhandenen ähnelt; belanglose Wegwerf-Notizen überspringst du.",
     "- Jede Notiz taucht höchstens einmal auf — über assignments und newProjects hinweg. Notizen, die nirgends passen, lässt du einfach weg.",
     "Formuliere alle Texte auf Deutsch.",
     "Vorhandene Projekte:",
@@ -1472,6 +1486,13 @@ export function buildCategorizationFromProviderText(
             typeof entry.description === "string" ? entry.description.trim() : "",
           reason: typeof entry.reason === "string" ? entry.reason.trim() : "",
           noteIds: ids,
+          relatedProjectIds: (Array.isArray(entry.relatedProjectIds)
+            ? entry.relatedProjectIds
+            : []
+          ).filter(
+            (projectId): projectId is string =>
+              typeof projectId === "string" && knownProjects.has(projectId),
+          ),
         },
       ];
     });
