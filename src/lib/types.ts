@@ -75,6 +75,10 @@ export interface AiSuggestion {
   suggestedDescription: string;
   suggestedProjectId: string | null;
   suggestedNewProjectTitle: string | null;
+  // Nur bei kind="project": weitere Notizen, die beim Annehmen mit dem
+  // neuen Projekt verknüpft werden (Batch-Kategorisierung bündelt so
+  // mehrere Bestandsnotizen in einem Vorschlag).
+  suggestedNoteIds: string[];
   confidence: number;
   priority: TaskPriority;
   dueDate: string | null;

@@ -90,7 +90,12 @@ export function SuggestionCard({
         {isProject ? (
           <>
             <InfoTile label={t("sugg.project")} value={t("sugg.projectNewValue")} />
-            <InfoTile label={t("sugg.source")} value={t("sugg.sourceValue")} />
+            <InfoTile
+              label={t("sugg.notesToAssign")}
+              value={String(
+                new Set([suggestion.rawNoteId, ...suggestion.suggestedNoteIds]).size,
+              )}
+            />
           </>
         ) : (
           <>

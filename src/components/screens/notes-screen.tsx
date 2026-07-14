@@ -1,7 +1,17 @@
 "use client";
 
-import { Camera, Link2, Loader2, Pin, Plus, Sparkles, StickyNote, Waypoints } from "lucide-react";
-import { useRef } from "react";
+import {
+  Camera,
+  FolderTree,
+  Link2,
+  Loader2,
+  Pin,
+  Plus,
+  Sparkles,
+  StickyNote,
+  Waypoints,
+} from "lucide-react";
+import { useRef, useState } from "react";
 import { cx, isNotePending, noteDisplayTitle } from "@/components/app-helpers";
 import { ScreenHeader } from "@/components/ui/primitives";
 import type { Translator } from "@/lib/i18n";
@@ -26,6 +36,7 @@ export function NotesScreen({
   onImportUrlChange,
   onImportUrl,
   onImportImage,
+  onCategorizeNotes,
 }: {
   notes: Note[];
   projectById: Map<string, Project>;
@@ -40,11 +51,30 @@ export function NotesScreen({
   onImportUrlChange: (value: string) => void;
   onImportUrl: () => void;
   onImportImage: (file: File) => void;
+  onCategorizeNotes: () => Promise<void>;
 }) {
   const imageInputRef = useRef<HTMLInputElement | null>(null);
   const pinned = notes.filter((note) => note.pinned);
   const others = notes.filter((note) => !note.pinned);
   const canImport = /^https?:\/\/\S+$/i.test(importUrl.trim());
+
+  // Batch-Kategorisierung: läuft asynchron im Worker; Zuordnungen und
+  // Inbox-Vorschläge treffen per Realtime ein.
+  const [categorizeState, setCategorizeState] = useState<"idle" | "running" | "failed">(
+    "idle",
+  );
+  const uncategorizedCount = notes.filter(
+    (note) => note.processed && !note.projectId && !isNotePending(note),
+  ).length;
+
+  async function startCategorization() {
+    setCategorizeState("running");
+    try {
+      await onCategorizeNotes();
+    } catch {
+      setCategorizeState("failed");
+    }
+  }
 
   return (
     <div className="flex flex-1 flex-col px-6 pt-3 md:px-8 md:pt-8 lg:px-10">
@@ -114,6 +144,30 @@ export function NotesScreen({
           </p>
         ) : null}
       </div>
+
+      {uncategorizedCount > 0 && categorizeState !== "running" ? (
+        <button
+          type="button"
+          onClick={() => void startCategorization()}
+          className="mt-3 flex items-center gap-2 rounded-[7px] border border-[var(--line)] bg-[var(--surface)] p-3 text-left text-[12px] font-bold text-[var(--ink-soft)] transition hover:bg-[var(--surface-strong)]"
+        >
+          <FolderTree className="h-4 w-4 shrink-0 text-[var(--red)]" />
+          {uncategorizedCount === 1
+            ? t("notes.categorize.button.one")
+            : t("notes.categorize.button.many", { count: uncategorizedCount })}
+        </button>
+      ) : null}
+      {categorizeState === "running" ? (
+        <p className="mt-3 flex items-center gap-2 rounded-[7px] border border-[var(--line)] bg-[var(--surface)] p-3 text-[12px] leading-5 text-[var(--ink-soft)]">
+          <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
+          {t("notes.categorize.running")}
+        </p>
+      ) : null}
+      {categorizeState === "failed" ? (
+        <p className="mt-3 rounded-[5px] border border-[var(--red)] bg-[var(--surface-strong)] p-2.5 text-[12px] leading-5 text-[var(--red)]">
+          {t("notes.categorize.failed")}
+        </p>
+      ) : null}
 
       {!notes.length ? (
         <div className="mt-6 rounded-[7px] border border-dashed border-[var(--line-strong)] p-5">

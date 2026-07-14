@@ -213,6 +213,22 @@ const messages = {
     en: "Screenshot/photo as note",
   },
   "notes.importing": { de: "Wird analysiert...", en: "Analyzing..." },
+  "notes.categorize.button.one": {
+    de: "1 Notiz ohne Projekt — von der KI einordnen lassen",
+    en: "1 note without a project — let the AI organize it",
+  },
+  "notes.categorize.button.many": {
+    de: "{count} Notizen ohne Projekt — von der KI einordnen lassen",
+    en: "{count} notes without a project — let the AI organize them",
+  },
+  "notes.categorize.running": {
+    de: "Die KI ordnet deine Notizen im Hintergrund ein. Zuordnungen erscheinen direkt an den Notizen, Vorschläge für neue Projekte in der Inbox.",
+    en: "The AI is organizing your notes in the background. Assignments appear on the notes directly, suggestions for new projects in your inbox.",
+  },
+  "notes.categorize.failed": {
+    de: "Die Einordnung konnte nicht gestartet werden. Bitte versuche es erneut.",
+    en: "Organizing could not be started. Please try again.",
+  },
   "notes.pinned": { de: "Angepinnt", en: "Pinned" },
   "notes.others": { de: "Weitere", en: "Others" },
   "notes.untitled": { de: "Ohne Titel", en: "Untitled" },
@@ -465,11 +481,12 @@ const messages = {
     en: "Event handed to Google Calendar.",
   },
   "sugg.projectAccepted": {
-    de: "Projekt angelegt und Notiz zugeordnet.",
-    en: "Project created and note assigned.",
+    de: "Projekt angelegt und Notizen zugeordnet.",
+    en: "Project created and notes assigned.",
   },
   "sugg.acceptProject": { de: "Projekt anlegen", en: "Create project" },
   "sugg.projectNewValue": { de: "Neu anlegen", en: "Create new" },
+  "sugg.notesToAssign": { de: "Notizen", en: "Notes" },
   "sugg.project": { de: "Projekt", en: "Project" },
   "sugg.deadline": { de: "Deadline", en: "Due date" },
   "sugg.priority": { de: "Priorität", en: "Priority" },

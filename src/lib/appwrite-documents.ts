@@ -96,6 +96,7 @@ function restoreNullableFields(key: CollectionKey, item: Record<string, unknown>
     data.suggestedDescription ??= "";
     data.suggestedProjectId ??= null;
     data.suggestedNewProjectTitle ??= null;
+    data.suggestedNoteIds ??= [];
     data.dueDate ??= null;
     data.eventStart ??= null;
     data.eventEnd ??= null;

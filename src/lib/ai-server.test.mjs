@@ -6,9 +6,11 @@ import {
   DEFAULT_AI_MODEL_ID,
 } from "./ai-models.ts";
 import {
+  buildCategorizationFromProviderText,
   buildGraphInsightsFromProviderText,
   buildNoteEnhancementFromProviderText,
   callEnhanceProvider,
+  categorizeNotesWithProvider,
   enhanceNoteWithProvider,
   extractImageText,
   extractProviderText,
@@ -794,6 +796,66 @@ test("provider calls carry an abort signal and map timeouts to a clear error", a
     /zu lange gedauert/,
   );
   assert.ok(sawSignal, "fetch bekommt ein AbortSignal");
+});
+
+test("categorization keeps only known ids and uses each note once", () => {
+  const result = buildCategorizationFromProviderText(
+    JSON.stringify({
+      assignments: [
+        { noteId: "note-1", projectId: "project-1" },
+        { noteId: "note-halluziniert", projectId: "project-1" },
+        { noteId: "note-2", projectId: "project-unbekannt" },
+        // Duplikat: note-1 ist bereits zugeordnet.
+        { noteId: "note-1", projectId: "project-1" },
+      ],
+      newProjects: [
+        {
+          title: "Japan-Reise",
+          description: "Alles zur Reiseplanung.",
+          reason: "Drei Notizen kreisen um dieselbe Reise.",
+          // note-1 ist schon zugeordnet, note-fake existiert nicht.
+          noteIds: ["note-1", "note-2", "note-3", "note-fake"],
+        },
+        { title: "", description: "ohne Titel", reason: "", noteIds: ["note-4"] },
+        { title: "Leeres Projekt", description: "", reason: "", noteIds: ["note-fake"] },
+      ],
+    }),
+    ["note-1", "note-2", "note-3", "note-4"],
+    ["project-1"],
+  );
+
+  assert.deepEqual(result.assignments, [{ noteId: "note-1", projectId: "project-1" }]);
+  assert.equal(result.newProjects.length, 1);
+  assert.equal(result.newProjects[0].title, "Japan-Reise");
+  assert.deepEqual(result.newProjects[0].noteIds, ["note-2", "note-3"]);
+});
+
+test("categorization prompt sends notes, projects and the json contract", async () => {
+  const calls = [];
+  await categorizeNotesWithProvider({
+    config: { ...GLM_TEST_CONFIG, baseUrl: "https://openrouter.ai/api/v1" },
+    notes: [
+      { id: "note-1", title: "Kirschblüte in Kyoto", tags: ["reise"], snippet: "Beste Zeit April." },
+    ],
+    projects: [
+      { id: "project-1", title: "Umzug", description: "", keywords: ["kartons"] },
+    ],
+    locale: "de",
+    fetchFn: async (url, init) => {
+      calls.push(JSON.parse(init.body));
+      return chatReply(JSON.stringify({ assignments: [], newProjects: [] }));
+    },
+  });
+
+  const body = calls[0];
+  const prompt = body.messages.at(-1).content;
+  assert.match(prompt, /Kirschblüte in Kyoto/);
+  assert.match(prompt, /Umzug/);
+  assert.match(prompt, /assignments/);
+  assert.match(prompt, /mindestens zwei zusammengehörige Notizen/);
+  assert.equal(body.response_format.type, "json_object");
+  // Strukturaufgabe: Reasoning aus, damit das Budget der Antwort gehört.
+  assert.deepEqual(body.reasoning, { enabled: false });
 });
 
 test("deep graph insights request a thorough answer with a bigger budget", async () => {

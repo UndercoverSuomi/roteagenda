@@ -44,6 +44,7 @@ import {
   fetchDailyBriefing,
   fetchGraphInsights,
   requestDeepGraphInsights,
+  requestNoteCategorization,
 } from "@/lib/ai-client";
 import type { GraphInsights } from "@/lib/ai-server";
 import type { GraphAnalysisPayload } from "@/components/screens/graph-screen";
@@ -964,10 +965,13 @@ export function RoteAgendaApp() {
       updatedAt: now,
     };
 
-    const sourceNote = data.notes.find((note) => note.id === suggestion.rawNoteId);
-    const updatedNote: Note | null = sourceNote
-      ? { ...sourceNote, projectId: project.id, updatedAt: now }
-      : null;
+    // Batch-Vorschläge bündeln mehrere Notizen; die Quell-Notiz gehört
+    // immer dazu.
+    const noteIds = new Set([suggestion.rawNoteId, ...suggestion.suggestedNoteIds]);
+    const updatedNotes: Note[] = data.notes
+      .filter((note) => noteIds.has(note.id) && note.projectId !== project.id)
+      .map((note) => ({ ...note, projectId: project.id, updatedAt: now }));
+    const updatedById = new Map(updatedNotes.map((note) => [note.id, note]));
     const acceptedSuggestion = {
       ...suggestion,
       state: "accepted" as const,
@@ -977,9 +981,7 @@ export function RoteAgendaApp() {
     setData((current) => ({
       ...current,
       projects: [project, ...current.projects],
-      notes: updatedNote
-        ? current.notes.map((note) => (note.id === updatedNote.id ? updatedNote : note))
-        : current.notes,
+      notes: current.notes.map((note) => updatedById.get(note.id) ?? note),
       suggestions: current.suggestions.map((item) =>
         item.id === suggestion.id ? acceptedSuggestion : item,
       ),
@@ -1000,8 +1002,8 @@ export function RoteAgendaApp() {
       collection: "projects",
       item: project,
     });
-    if (updatedNote) {
-      persist(t("entity.note"), { kind: "upsert", collection: "notes", item: updatedNote });
+    for (const note of updatedNotes) {
+      persist(t("entity.note"), { kind: "upsert", collection: "notes", item: note });
     }
     persist(t("entity.suggestion"), {
       kind: "upsert",
@@ -1593,6 +1595,7 @@ export function RoteAgendaApp() {
           onImportUrlChange={setNoteImportUrl}
           onImportUrl={() => void handleImportUrl()}
           onImportImage={(file) => void handleImportImage(file)}
+          onCategorizeNotes={requestNoteCategorization}
         />
       );
     }

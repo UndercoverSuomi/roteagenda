@@ -408,6 +408,7 @@ function normalizeSuggestion(value, rawNoteId, createdAt, id) {
       ),
       suggestedProjectId: null,
       suggestedNewProjectTitle: suggestedNewProjectTitle ?? suggestedTitle,
+      suggestedNoteIds: [],
       confidence,
       priority,
       dueDate: null,
@@ -430,6 +431,7 @@ function normalizeSuggestion(value, rawNoteId, createdAt, id) {
     ),
     suggestedProjectId: readNullableString(value.suggestedProjectId, "suggestedProjectId"),
     suggestedNewProjectTitle,
+    suggestedNoteIds: [],
     confidence,
     priority,
     dueDate,
@@ -841,6 +843,115 @@ async function summarizeYouTubeVideo({
   }
   return summary;
 }
+var CATEGORIZE_JSON_SHAPE = '{"assignments":[{"noteId":"...","projectId":"..."}],"newProjects":[{"title":"...","description":"...","reason":"...","noteIds":["note-id"]}]}';
+function buildCategorizePrompt(notes, projects, locale) {
+  const compactNotes = notes.map((note) => ({
+    id: note.id,
+    t: note.title.slice(0, 80),
+    g: note.tags.slice(0, MAX_TAGS),
+    s: note.snippet.slice(0, 160)
+  }));
+  if (locale === "en") {
+    return [
+      "You are the structuring AI of the note app Rote Agenda. Projects are the app's categorization system \u2014 for ideas, links, photos and knowledge notes, not just tasks.",
+      "You receive the user's UNASSIGNED notes (id, t=title, g=tags, s=snippet) plus the existing projects. Respond exclusively with valid JSON in this shape:",
+      CATEGORIZE_JSON_SHAPE,
+      "- assignments: every note that genuinely fits an EXISTING project. Only real thematic fits \u2014 leave notes out rather than forcing them.",
+      "- newProjects: when several remaining notes clearly belong to one larger topic or undertaking, propose ONE project for them: title is a concise project name, description one sentence of purpose, reason explains briefly why these notes belong together, noteIds lists the matching notes. Only propose a project for at least two related notes or one clearly project-worthy undertaking; never one similar to an existing project; skip throwaway notes.",
+      "- A note appears at most once across assignments and newProjects. Notes that fit nowhere are simply omitted.",
+      "Write every text in English.",
+      "Existing projects:",
+      JSON.stringify(projects),
+      "Unassigned notes:",
+      JSON.stringify(compactNotes)
+    ].join("\n");
+  }
+  return [
+    "Du bist die strukturierende KI der Notiz-App Rote Agenda. Projekte sind das Kategorisierungssystem der App \u2014 f\xFCr Ideen, Links, Fotos und Wissens-Notizen, nicht nur f\xFCr Aufgaben.",
+    "Du bekommst die UNZUGEORDNETEN Notizen des Nutzers (id, t=Titel, g=Tags, s=Snippet) sowie die vorhandenen Projekte. Antworte ausschlie\xDFlich mit g\xFCltigem JSON in dieser Form:",
+    CATEGORIZE_JSON_SHAPE,
+    "- assignments: jede Notiz, die wirklich zu einem VORHANDENEN Projekt passt. Nur echte thematische Treffer \u2014 lass Notizen lieber weg, statt sie zu erzwingen.",
+    "- newProjects: Geh\xF6ren mehrere \xFCbrige Notizen klar zu einem gr\xF6\xDFeren Thema oder Vorhaben, schlage daf\xFCr EIN Projekt vor: title ist ein pr\xE4gnanter Projektname, description ein Satz zum Zweck, reason begr\xFCndet kurz, warum diese Notizen zusammengeh\xF6ren, noteIds listet die passenden Notizen. Schlage ein Projekt nur f\xFCr mindestens zwei zusammengeh\xF6rige Notizen oder ein klar projektw\xFCrdiges Vorhaben vor; nie eines, das einem vorhandenen \xE4hnelt; belanglose Wegwerf-Notizen \xFCberspringst du.",
+    "- Jede Notiz taucht h\xF6chstens einmal auf \u2014 \xFCber assignments und newProjects hinweg. Notizen, die nirgends passen, l\xE4sst du einfach weg.",
+    "Formuliere alle Texte auf Deutsch.",
+    "Vorhandene Projekte:",
+    JSON.stringify(projects),
+    "Unzugeordnete Notizen:",
+    JSON.stringify(compactNotes)
+  ].join("\n");
+}
+function buildCategorizationFromProviderText(providerText, noteIds, projectIds) {
+  const payload = parseProviderJson(providerText);
+  if (!isRecord(payload)) {
+    throw new Error("KI-Antwort enth\xE4lt kein g\xFCltiges Objekt.");
+  }
+  const knownNotes = new Set(noteIds);
+  const knownProjects = new Set(projectIds);
+  const usedNotes = /* @__PURE__ */ new Set();
+  const assignments = (Array.isArray(payload.assignments) ? payload.assignments : []).flatMap((entry) => {
+    if (!isRecord(entry)) return [];
+    const noteId = typeof entry.noteId === "string" ? entry.noteId : "";
+    const projectId = typeof entry.projectId === "string" ? entry.projectId : "";
+    if (!knownNotes.has(noteId) || !knownProjects.has(projectId)) return [];
+    if (usedNotes.has(noteId)) return [];
+    usedNotes.add(noteId);
+    return [{ noteId, projectId }];
+  });
+  const newProjects = (Array.isArray(payload.newProjects) ? payload.newProjects : []).flatMap((entry) => {
+    if (!isRecord(entry)) return [];
+    const title = typeof entry.title === "string" ? entry.title.trim() : "";
+    if (!title) return [];
+    const ids = (Array.isArray(entry.noteIds) ? entry.noteIds : []).filter(
+      (noteId) => typeof noteId === "string" && knownNotes.has(noteId) && !usedNotes.has(noteId)
+    );
+    if (!ids.length) return [];
+    ids.forEach((noteId) => usedNotes.add(noteId));
+    return [
+      {
+        title: title.slice(0, 120),
+        description: typeof entry.description === "string" ? entry.description.trim() : "",
+        reason: typeof entry.reason === "string" ? entry.reason.trim() : "",
+        noteIds: ids
+      }
+    ];
+  });
+  return { assignments, newProjects };
+}
+async function categorizeNotesWithProvider({
+  config,
+  notes,
+  projects,
+  locale = "de",
+  timeoutMs,
+  fetchFn = fetch
+}) {
+  const prompt = buildCategorizePrompt(notes, projects, locale);
+  const system = locale === "en" ? "You assign notes to projects and respond exclusively with JSON." : "Du ordnest Notizen Projekten zu und antwortest ausschlie\xDFlich mit JSON.";
+  const noteIds = notes.map((note) => note.id);
+  const projectIds = projects.map((project) => project.id);
+  let lastError;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const response = await requestProvider(
+        config,
+        { system, user: prompt },
+        { maxTokens: 3e3, json: true, timeoutMs, noReasoning: true },
+        fetchFn
+      );
+      const payload = await readJsonResponse(response, config.label);
+      return buildCategorizationFromProviderText(
+        extractProviderText(payload),
+        noteIds,
+        projectIds
+      );
+    } catch (error) {
+      lastError = error;
+      const retryable = error instanceof Error && error.message.startsWith("KI-Antwort");
+      if (!retryable) throw error;
+    }
+  }
+  throw lastError;
+}
 var MAX_INSIGHT_NODES = 250;
 var MAX_INSIGHT_EDGES = 800;
 var MAX_INSIGHT_LIST_ITEMS = 6;
@@ -1153,6 +1264,10 @@ var main_default = async ({ req, res, log, error }) => {
   const storage = new Storage(client);
   const users = new Users(client);
   if ((req.headers["x-appwrite-trigger"] ?? "") === "http") {
+    const payload = readDocument(req);
+    if (payload?.type === "categorize-notes") {
+      return runNoteCategorization({ req, res, log, error }, databases, users);
+    }
     return runDeepGraphInsights({ req, res, log, error }, databases, users);
   }
   const doc = readDocument(req);
@@ -1385,6 +1500,125 @@ async function runDeepGraphInsights({ req, res, log, error }, databases, users) 
         error(`Fehlerstatus konnte nicht gespeichert werden: ${String(updateError)}`);
       }
     }
+    return res.json({ ok: false, error: message });
+  }
+}
+var CATEGORIZE_TIMEOUT_MS = 9e4;
+var CATEGORIZE_CHUNK_SIZE = 80;
+async function runNoteCategorization({ req, res, log, error }, databases, users) {
+  const userId = String(req.headers["x-appwrite-user-id"] ?? "");
+  if (!userId) {
+    return res.json({ error: "Die Kategorisierung braucht eine Nutzer-Sitzung." }, 401);
+  }
+  const marker = `user:${userId}`;
+  const permissions = [
+    `read("user:${userId}")`,
+    `update("user:${userId}")`,
+    `delete("user:${userId}")`
+  ];
+  const now = () => (/* @__PURE__ */ new Date()).toISOString();
+  try {
+    const prefs = await users.getPrefs(userId).catch(() => ({}));
+    const aiModel = typeof prefs.aiModel === "string" && isAiModelId(prefs.aiModel) ? prefs.aiModel : DEFAULT_AI_MODEL_ID;
+    const locale = prefs.locale === "en" ? "en" : "de";
+    const resolved = resolveAiModelConfig(aiModel);
+    if (!resolved.ok) {
+      return res.json({ error: resolved.error }, 503);
+    }
+    const [projects, notes, suggestions] = await Promise.all([
+      listUserDocuments(databases, PROJECTS_ID, marker),
+      listUserDocuments(databases, NOTES_ID, marker),
+      listUserDocuments(databases, SUGGESTIONS_ID, marker)
+    ]);
+    const candidates = notes.filter(
+      (note) => note.processed === true && !note.projectId && !(typeof note.processingError === "string" && note.processingError) && Boolean(note.title || note.content)
+    );
+    if (!candidates.length) {
+      log("Kategorisierung: nichts zu tun");
+      return res.json({ ok: true, assigned: 0, proposed: 0 });
+    }
+    const projectInputs = projects.filter((project) => project.aiEnabled !== false).map((project) => ({
+      id: String(project.id ?? project.$id),
+      title: String(project.title ?? ""),
+      description: String(project.description ?? ""),
+      keywords: Array.isArray(project.keywords) ? project.keywords : []
+    }));
+    const assignments = [];
+    const mergedProjects = /* @__PURE__ */ new Map();
+    for (let offset = 0; offset < candidates.length; offset += CATEGORIZE_CHUNK_SIZE) {
+      const chunk = candidates.slice(offset, offset + CATEGORIZE_CHUNK_SIZE);
+      const result = await categorizeNotesWithProvider({
+        config: resolved.config,
+        notes: chunk.map((note) => ({
+          id: String(note.id ?? note.$id),
+          title: String(note.title || String(note.content ?? "").slice(0, 60)),
+          tags: Array.isArray(note.tags) ? note.tags : [],
+          snippet: String(note.enhanced || note.content || "").slice(0, 160)
+        })),
+        projects: projectInputs,
+        locale,
+        timeoutMs: CATEGORIZE_TIMEOUT_MS
+      });
+      assignments.push(...result.assignments);
+      for (const project of result.newProjects) {
+        const key = project.title.toLowerCase();
+        const existing = mergedProjects.get(key);
+        if (existing) {
+          existing.noteIds.push(...project.noteIds);
+        } else {
+          mergedProjects.set(key, { ...project, noteIds: [...project.noteIds] });
+        }
+      }
+    }
+    for (const assignment of assignments) {
+      try {
+        await databases.updateDocument(DATABASE_ID, NOTES_ID, assignment.noteId, {
+          projectId: assignment.projectId,
+          updatedAt: now()
+        });
+      } catch (assignError) {
+        error(`Zuordnung fehlgeschlagen (${assignment.noteId}): ${String(assignError)}`);
+      }
+    }
+    const pendingProjectTitles = new Set(
+      suggestions.filter((item) => item.kind === "project" && item.state === "pending").map((item) => String(item.suggestedTitle ?? "").toLowerCase())
+    );
+    let proposed = 0;
+    for (const project of mergedProjects.values()) {
+      if (pendingProjectTitles.has(project.title.toLowerCase())) continue;
+      const suggestionId = ID.unique();
+      try {
+        await databases.createDocument(
+          DATABASE_ID,
+          SUGGESTIONS_ID,
+          suggestionId,
+          {
+            id: suggestionId,
+            rawNoteId: project.noteIds[0],
+            kind: "project",
+            suggestedTitle: project.title.slice(0, 250),
+            suggestedDescription: project.description.slice(0, 4e3),
+            suggestedNewProjectTitle: project.title.slice(0, 120),
+            suggestedNoteIds: project.noteIds.slice(0, 100),
+            confidence: 0.8,
+            priority: "medium",
+            reasoning: (project.reason || project.description).slice(0, 4e3),
+            needsReview: false,
+            state: "pending",
+            createdAt: now()
+          },
+          permissions
+        );
+        proposed += 1;
+      } catch (suggestionError) {
+        error(`Projekt-Vorschlag fehlgeschlagen: ${String(suggestionError)}`);
+      }
+    }
+    log(`Kategorisierung: ${assignments.length} zugeordnet, ${proposed} Projekt-Vorschl\xE4ge`);
+    return res.json({ ok: true, assigned: assignments.length, proposed });
+  } catch (workerError) {
+    const message = workerError instanceof Error && workerError.message ? workerError.message : "Unbekannter Fehler bei der Kategorisierung.";
+    error(message);
     return res.json({ ok: false, error: message });
   }
 }

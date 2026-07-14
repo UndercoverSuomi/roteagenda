@@ -88,6 +88,7 @@ test("legacy suggestion documents get text and reasoning defaults", () => {
   assert.equal(suggestion.suggestedDescription, "");
   assert.equal(suggestion.reasoning, "");
   assert.equal(suggestion.suggestedProjectId, null);
+  assert.deepEqual(suggestion.suggestedNoteIds, []);
   assert.equal(suggestion.eventStart, null);
   assert.equal(suggestion.eventEnd, null);
 });

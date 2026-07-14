@@ -595,6 +595,7 @@ function normalizeSuggestion(
       ),
       suggestedProjectId: null,
       suggestedNewProjectTitle: suggestedNewProjectTitle ?? suggestedTitle,
+      suggestedNoteIds: [],
       confidence,
       priority,
       dueDate: null,
@@ -618,6 +619,7 @@ function normalizeSuggestion(
     ),
     suggestedProjectId: readNullableString(value.suggestedProjectId, "suggestedProjectId"),
     suggestedNewProjectTitle,
+    suggestedNoteIds: [],
     confidence,
     priority,
     dueDate,
@@ -1342,6 +1344,183 @@ export async function generateDailyBriefing({
 
   const payload = await readJsonResponse(response, config.label);
   return extractProviderText(payload).trim();
+}
+
+// ── Batch-Kategorisierung von Bestandsnotizen ───────────────────────
+
+export type CategorizeNoteInput = {
+  id: string;
+  title: string;
+  tags: string[];
+  snippet: string;
+};
+
+export type CategorizeProjectInput = {
+  id: string;
+  title: string;
+  description: string;
+  keywords: string[];
+};
+
+export type NoteCategorization = {
+  assignments: Array<{ noteId: string; projectId: string }>;
+  newProjects: Array<{
+    title: string;
+    description: string;
+    reason: string;
+    noteIds: string[];
+  }>;
+};
+
+type CategorizeParams = {
+  config: ResolvedAiModelConfig;
+  notes: CategorizeNoteInput[];
+  projects: CategorizeProjectInput[];
+  locale?: Locale;
+  timeoutMs?: number;
+  fetchFn?: typeof fetch;
+};
+
+const CATEGORIZE_JSON_SHAPE =
+  '{"assignments":[{"noteId":"...","projectId":"..."}],"newProjects":[{"title":"...","description":"...","reason":"...","noteIds":["note-id"]}]}';
+
+function buildCategorizePrompt(
+  notes: CategorizeNoteInput[],
+  projects: CategorizeProjectInput[],
+  locale: Locale,
+) {
+  const compactNotes = notes.map((note) => ({
+    id: note.id,
+    t: note.title.slice(0, 80),
+    g: note.tags.slice(0, MAX_TAGS),
+    s: note.snippet.slice(0, 160),
+  }));
+
+  if (locale === "en") {
+    return [
+      "You are the structuring AI of the note app Rote Agenda. Projects are the app's categorization system — for ideas, links, photos and knowledge notes, not just tasks.",
+      "You receive the user's UNASSIGNED notes (id, t=title, g=tags, s=snippet) plus the existing projects. Respond exclusively with valid JSON in this shape:",
+      CATEGORIZE_JSON_SHAPE,
+      "- assignments: every note that genuinely fits an EXISTING project. Only real thematic fits — leave notes out rather than forcing them.",
+      "- newProjects: when several remaining notes clearly belong to one larger topic or undertaking, propose ONE project for them: title is a concise project name, description one sentence of purpose, reason explains briefly why these notes belong together, noteIds lists the matching notes. Only propose a project for at least two related notes or one clearly project-worthy undertaking; never one similar to an existing project; skip throwaway notes.",
+      "- A note appears at most once across assignments and newProjects. Notes that fit nowhere are simply omitted.",
+      "Write every text in English.",
+      "Existing projects:",
+      JSON.stringify(projects),
+      "Unassigned notes:",
+      JSON.stringify(compactNotes),
+    ].join("\n");
+  }
+
+  return [
+    "Du bist die strukturierende KI der Notiz-App Rote Agenda. Projekte sind das Kategorisierungssystem der App — für Ideen, Links, Fotos und Wissens-Notizen, nicht nur für Aufgaben.",
+    "Du bekommst die UNZUGEORDNETEN Notizen des Nutzers (id, t=Titel, g=Tags, s=Snippet) sowie die vorhandenen Projekte. Antworte ausschließlich mit gültigem JSON in dieser Form:",
+    CATEGORIZE_JSON_SHAPE,
+    "- assignments: jede Notiz, die wirklich zu einem VORHANDENEN Projekt passt. Nur echte thematische Treffer — lass Notizen lieber weg, statt sie zu erzwingen.",
+    "- newProjects: Gehören mehrere übrige Notizen klar zu einem größeren Thema oder Vorhaben, schlage dafür EIN Projekt vor: title ist ein prägnanter Projektname, description ein Satz zum Zweck, reason begründet kurz, warum diese Notizen zusammengehören, noteIds listet die passenden Notizen. Schlage ein Projekt nur für mindestens zwei zusammengehörige Notizen oder ein klar projektwürdiges Vorhaben vor; nie eines, das einem vorhandenen ähnelt; belanglose Wegwerf-Notizen überspringst du.",
+    "- Jede Notiz taucht höchstens einmal auf — über assignments und newProjects hinweg. Notizen, die nirgends passen, lässt du einfach weg.",
+    "Formuliere alle Texte auf Deutsch.",
+    "Vorhandene Projekte:",
+    JSON.stringify(projects),
+    "Unzugeordnete Notizen:",
+    JSON.stringify(compactNotes),
+  ].join("\n");
+}
+
+export function buildCategorizationFromProviderText(
+  providerText: string,
+  noteIds: string[],
+  projectIds: string[],
+): NoteCategorization {
+  const payload = parseProviderJson(providerText);
+  if (!isRecord(payload)) {
+    throw new Error("KI-Antwort enthält kein gültiges Objekt.");
+  }
+
+  const knownNotes = new Set(noteIds);
+  const knownProjects = new Set(projectIds);
+  // Jede Notiz höchstens einmal — halluzinierte oder doppelte IDs fallen raus.
+  const usedNotes = new Set<string>();
+
+  const assignments = (Array.isArray(payload.assignments) ? payload.assignments : [])
+    .flatMap((entry) => {
+      if (!isRecord(entry)) return [];
+      const noteId = typeof entry.noteId === "string" ? entry.noteId : "";
+      const projectId = typeof entry.projectId === "string" ? entry.projectId : "";
+      if (!knownNotes.has(noteId) || !knownProjects.has(projectId)) return [];
+      if (usedNotes.has(noteId)) return [];
+      usedNotes.add(noteId);
+      return [{ noteId, projectId }];
+    });
+
+  const newProjects = (Array.isArray(payload.newProjects) ? payload.newProjects : [])
+    .flatMap((entry) => {
+      if (!isRecord(entry)) return [];
+      const title = typeof entry.title === "string" ? entry.title.trim() : "";
+      if (!title) return [];
+      const ids = (Array.isArray(entry.noteIds) ? entry.noteIds : [])
+        .filter(
+          (noteId): noteId is string =>
+            typeof noteId === "string" && knownNotes.has(noteId) && !usedNotes.has(noteId),
+        );
+      if (!ids.length) return [];
+      ids.forEach((noteId) => usedNotes.add(noteId));
+      return [
+        {
+          title: title.slice(0, 120),
+          description:
+            typeof entry.description === "string" ? entry.description.trim() : "",
+          reason: typeof entry.reason === "string" ? entry.reason.trim() : "",
+          noteIds: ids,
+        },
+      ];
+    });
+
+  return { assignments, newProjects };
+}
+
+// Ordnet unzugeordnete Bestandsnotizen vorhandenen Projekten zu und
+// bündelt den Rest zu Neues-Projekt-Vorschlägen — ein Provider-Aufruf
+// pro Notiz-Block, mit dem üblichen einen JSON-Retry.
+export async function categorizeNotesWithProvider({
+  config,
+  notes,
+  projects,
+  locale = "de",
+  timeoutMs,
+  fetchFn = fetch,
+}: CategorizeParams): Promise<NoteCategorization> {
+  const prompt = buildCategorizePrompt(notes, projects, locale);
+  const system =
+    locale === "en"
+      ? "You assign notes to projects and respond exclusively with JSON."
+      : "Du ordnest Notizen Projekten zu und antwortest ausschließlich mit JSON.";
+  const noteIds = notes.map((note) => note.id);
+  const projectIds = projects.map((project) => project.id);
+  let lastError: unknown;
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const response = await requestProvider(
+        config,
+        { system, user: prompt },
+        { maxTokens: 3000, json: true, timeoutMs, noReasoning: true },
+        fetchFn,
+      );
+      const payload = await readJsonResponse(response, config.label);
+      return buildCategorizationFromProviderText(
+        extractProviderText(payload),
+        noteIds,
+        projectIds,
+      );
+    } catch (error) {
+      lastError = error;
+      const retryable = error instanceof Error && error.message.startsWith("KI-Antwort");
+      if (!retryable) throw error;
+    }
+  }
+
+  throw lastError;
 }
 
 // ── Wissensnetz-Analyse ─────────────────────────────────────────────

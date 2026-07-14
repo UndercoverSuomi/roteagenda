@@ -11,6 +11,7 @@
 
 import { Client, Databases, ID, Storage, Users, Query } from "node-appwrite";
 import {
+  categorizeNotesWithProvider,
   enhanceNoteWithProvider,
   extractImageText,
   generateGraphInsights,
@@ -54,8 +55,12 @@ export default async ({ req, res, log, error }: Context) => {
   const users = new Users(client);
 
   // Direkte Ausführung aus der App (functions.createExecution) statt
-  // DB-Event: aktuell nur die Graph-Tiefenanalyse.
+  // DB-Event: Graph-Tiefenanalyse oder Batch-Kategorisierung.
   if ((req.headers["x-appwrite-trigger"] ?? "") === "http") {
+    const payload = readDocument(req);
+    if (payload?.type === "categorize-notes") {
+      return runNoteCategorization({ req, res, log, error }, databases, users);
+    }
     return runDeepGraphInsights({ req, res, log, error }, databases, users);
   }
 
@@ -371,6 +376,169 @@ async function runDeepGraphInsights(
       }
     }
 
+    return res.json({ ok: false, error: message });
+  }
+}
+
+// Batch-Kategorisierung: ordnet alle unzugeordneten, bereits
+// verarbeiteten Notizen vorhandenen Projekten zu (direkte Updates, die
+// App zieht per Realtime nach) und bündelt zusammengehörige Rest-
+// Notizen zu Neues-Projekt-Vorschlägen in der Inbox.
+const CATEGORIZE_TIMEOUT_MS = 90_000;
+const CATEGORIZE_CHUNK_SIZE = 80;
+
+async function runNoteCategorization(
+  { req, res, log, error }: Context,
+  databases: Databases,
+  users: Users,
+) {
+  const userId = String(req.headers["x-appwrite-user-id"] ?? "");
+  if (!userId) {
+    return res.json({ error: "Die Kategorisierung braucht eine Nutzer-Sitzung." }, 401);
+  }
+
+  const marker = `user:${userId}`;
+  const permissions = [
+    `read("user:${userId}")`,
+    `update("user:${userId}")`,
+    `delete("user:${userId}")`,
+  ];
+  const now = () => new Date().toISOString();
+
+  try {
+    const prefs = await users.getPrefs(userId).catch(() => ({}) as Record<string, unknown>);
+    const aiModel =
+      typeof prefs.aiModel === "string" && isAiModelId(prefs.aiModel)
+        ? prefs.aiModel
+        : DEFAULT_AI_MODEL_ID;
+    const locale = prefs.locale === "en" ? ("en" as const) : ("de" as const);
+    const resolved = resolveAiModelConfig(aiModel);
+    if (!resolved.ok) {
+      return res.json({ error: resolved.error }, 503);
+    }
+
+    const [projects, notes, suggestions] = await Promise.all([
+      listUserDocuments(databases, PROJECTS_ID, marker),
+      listUserDocuments(databases, NOTES_ID, marker),
+      listUserDocuments(databases, SUGGESTIONS_ID, marker),
+    ]);
+
+    const candidates = notes.filter(
+      (note) =>
+        note.processed === true &&
+        !note.projectId &&
+        !(typeof note.processingError === "string" && note.processingError) &&
+        Boolean(note.title || note.content),
+    );
+    if (!candidates.length) {
+      log("Kategorisierung: nichts zu tun");
+      return res.json({ ok: true, assigned: 0, proposed: 0 });
+    }
+
+    const projectInputs = projects
+      .filter((project) => project.aiEnabled !== false)
+      .map((project) => ({
+        id: String(project.id ?? project.$id),
+        title: String(project.title ?? ""),
+        description: String(project.description ?? ""),
+        keywords: Array.isArray(project.keywords) ? (project.keywords as string[]) : [],
+      }));
+
+    // Blockweise kategorisieren; Neues-Projekt-Vorschläge über alle
+    // Blöcke hinweg per Titel zusammenführen.
+    const assignments: Array<{ noteId: string; projectId: string }> = [];
+    const mergedProjects = new Map<
+      string,
+      { title: string; description: string; reason: string; noteIds: string[] }
+    >();
+
+    for (let offset = 0; offset < candidates.length; offset += CATEGORIZE_CHUNK_SIZE) {
+      const chunk = candidates.slice(offset, offset + CATEGORIZE_CHUNK_SIZE);
+      const result = await categorizeNotesWithProvider({
+        config: resolved.config,
+        notes: chunk.map((note) => ({
+          id: String(note.id ?? note.$id),
+          title: String(note.title || String(note.content ?? "").slice(0, 60)),
+          tags: Array.isArray(note.tags) ? (note.tags as string[]) : [],
+          snippet: String(note.enhanced || note.content || "").slice(0, 160),
+        })),
+        projects: projectInputs,
+        locale,
+        timeoutMs: CATEGORIZE_TIMEOUT_MS,
+      });
+
+      assignments.push(...result.assignments);
+      for (const project of result.newProjects) {
+        const key = project.title.toLowerCase();
+        const existing = mergedProjects.get(key);
+        if (existing) {
+          existing.noteIds.push(...project.noteIds);
+        } else {
+          mergedProjects.set(key, { ...project, noteIds: [...project.noteIds] });
+        }
+      }
+    }
+
+    // Zuordnungen direkt anwenden — der Event-Guard (processed=true)
+    // verhindert, dass diese Updates den Worker erneut anwerfen.
+    for (const assignment of assignments) {
+      try {
+        await databases.updateDocument(DATABASE_ID, NOTES_ID, assignment.noteId, {
+          projectId: assignment.projectId,
+          updatedAt: now(),
+        });
+      } catch (assignError) {
+        error(`Zuordnung fehlgeschlagen (${assignment.noteId}): ${String(assignError)}`);
+      }
+    }
+
+    // Bereits offene Projekt-Vorschläge nicht doppeln.
+    const pendingProjectTitles = new Set(
+      suggestions
+        .filter((item) => item.kind === "project" && item.state === "pending")
+        .map((item) => String(item.suggestedTitle ?? "").toLowerCase()),
+    );
+
+    let proposed = 0;
+    for (const project of mergedProjects.values()) {
+      if (pendingProjectTitles.has(project.title.toLowerCase())) continue;
+      const suggestionId = ID.unique();
+      try {
+        await databases.createDocument(
+          DATABASE_ID,
+          SUGGESTIONS_ID,
+          suggestionId,
+          {
+            id: suggestionId,
+            rawNoteId: project.noteIds[0],
+            kind: "project",
+            suggestedTitle: project.title.slice(0, 250),
+            suggestedDescription: project.description.slice(0, 4000),
+            suggestedNewProjectTitle: project.title.slice(0, 120),
+            suggestedNoteIds: project.noteIds.slice(0, 100),
+            confidence: 0.8,
+            priority: "medium",
+            reasoning: (project.reason || project.description).slice(0, 4000),
+            needsReview: false,
+            state: "pending",
+            createdAt: now(),
+          },
+          permissions,
+        );
+        proposed += 1;
+      } catch (suggestionError) {
+        error(`Projekt-Vorschlag fehlgeschlagen: ${String(suggestionError)}`);
+      }
+    }
+
+    log(`Kategorisierung: ${assignments.length} zugeordnet, ${proposed} Projekt-Vorschläge`);
+    return res.json({ ok: true, assigned: assignments.length, proposed });
+  } catch (workerError) {
+    const message =
+      workerError instanceof Error && workerError.message
+        ? workerError.message
+        : "Unbekannter Fehler bei der Kategorisierung.";
+    error(message);
     return res.json({ ok: false, error: message });
   }
 }

@@ -218,6 +218,17 @@ export async function requestDeepGraphInsights(): Promise<void> {
   });
 }
 
+// Batch-Kategorisierung der Bestandsnotizen im Notiz-Worker: Zuordnungen
+// zu vorhandenen Projekten kommen als Realtime-Updates an den Notizen an,
+// Neues-Projekt-Vorschläge erscheinen in der Inbox.
+export async function requestNoteCategorization(): Promise<void> {
+  await functions.createExecution({
+    functionId: APPWRITE_NOTE_WORKER_FUNCTION_ID,
+    body: JSON.stringify({ type: "categorize-notes" }),
+    async: true,
+  });
+}
+
 export async function fetchDailyBriefing({
   modelId,
   tasks,
